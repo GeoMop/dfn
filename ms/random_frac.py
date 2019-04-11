@@ -12,7 +12,7 @@ class FractureData:
         self.normal = np.array([nx, ny, nz])
         self.tag = tag
 
-    def get_rotation_axis_angle(self, from_vec = np.array([0,0,1])):
+    def get_rotation_axis_angle(self, from_vec=np.array([0, 0, 1])):
         axis = np.cross(from_vec, self.normal)
         a_sin = np.linalg.norm(axis)
         a_cos = np.dot(from_vec, self.normal)
@@ -100,6 +100,8 @@ def generate_mesh(fractures_data, max_el_size, file_name, verbose=0, shape="circ
         fractures = generate_disks(factory, fractures_data)
     elif shape == "rectangle":
         fractures = generate_rectangles(factory, fractures_data)
+    elif shape == "ellipse":
+        fractures = generate_ellipses(factory, fractures_data)
 
     # set physical id and name of fractures
     fractures_phys_id = model.addPhysicalGroup(2, [x[1] for x in fractures], -1)
@@ -124,7 +126,7 @@ def generate_mesh(fractures_data, max_el_size, file_name, verbose=0, shape="circ
     model.mesh.field.add("Distance", 1)
     model.mesh.field.setNumber(1, "NNodesByEdge", 100)
     frac_bdry = model.getBoundary(fractures, False, False, False)
-    model.mesh.field.setNumbers(1, "EdgesList", [tag for (dm,tag) in frac_bdry if dm==1])
+    model.mesh.field.setNumbers(1, "EdgesList", [tag for (dm, tag) in frac_bdry if dm == 1])
     model.mesh.field.add("Threshold", 2)
     model.mesh.field.setNumber(2, "IField", 1)
     model.mesh.field.setNumber(2, "LcMin", max_el_size*0.03)
@@ -145,6 +147,12 @@ def generate_mesh(fractures_data, max_el_size, file_name, verbose=0, shape="circ
 
 
 def generate_disks(factory, fractures_data):
+    """
+    Generate disks fractures
+    :param factory: gmsh.model.occ
+    :param fractures_data: list of FractureData
+    :return: tags
+    """
     # create fractures (currently we ignore r2 and create circular disks)
     disks = []
     tags = []
@@ -166,15 +174,17 @@ def generate_disks(factory, fractures_data):
 
     # fragment fractures
     fractures, fractures_map = factory.fragment(disks, [])
-    print('disks = ', disks)
-    print('fractures = ', fractures)
-    print('fractures_map = ', fractures_map)
     assert len(fractures_map) == len(disks)
     return fractures
 
 
 def generate_rectangles(factory, fractures_data):
-    # create fractures (currently we ignore r2 and create circular disks)
+    """
+    Generate rectangular fractures
+    :param factory: gmsh.model.occ
+    :param fractures_data: list of FractureData
+    :return: tags
+    """
     rectangles = []
     tags = []
 
@@ -202,12 +212,34 @@ def generate_rectangles(factory, fractures_data):
 
     # fragment fractures
     fractures, fractures_map = factory.fragment(rectangles, [])
-    print('disks = ', rectangles)
-    print('fractures = ', fractures)
-    print('fractures_map = ', fractures_map)
     assert len(fractures_map) == len(rectangles)
-
     return fractures
 
 
+def generate_ellipses(factory, fractures_data):
+    """
+    Generate ellipses fractures
+    :param factory: gmsh.model.occ
+    :param fractures_data: list of FractureData
+    :return: tags
+    """
+    ellipses = []
+    tags = []
 
+    for f in fractures_data:
+        axis, angle = f.get_rotation_axis_angle()
+
+        ellipse = factory.addEllipse(f.centre[0], f.centre[1], f.centre[2], f.r1, f.r2)
+
+        factory.rotate([(1, ellipse)], f.centre[0], f.centre[1], f.centre[2],
+                       axis[0], axis[1], axis[2], angle)
+
+        cl = factory.addCurveLoop([ellipse])
+        d = factory.addPlaneSurface([cl])
+        ellipses.append((2, d))
+        tags.append(f.tag)
+
+    # fragment fractures
+    fractures, fractures_map = factory.fragment(ellipses, [])
+    assert len(fractures_map) == len(ellipses)
+    return fractures
