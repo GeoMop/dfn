@@ -16,6 +16,4 @@ write_fractures(frac_data, 'fractures.dat')
 frac_data = read_fractures('fractures.dat')
 
 # generate mesh and save to file
-#generate_mesh(frac_data, max_el_size=1, file_name="test_api.msh2", verbose=1)
-
 generate_mesh(frac_data, max_el_size=1, file_name="test_api.msh2", verbose=1, shape="rectangle")
