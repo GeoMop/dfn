@@ -136,8 +136,8 @@ def generate_mesh(fractures_data, max_el_size, file_name, verbose=0):
     box = factory.addBox(0, 0, 0, 1, 1, 1)
 
     factory.synchronize()
-    # Embed the model entities of dimension 'dim', and tags 'tag', ...] in the other model entity which is given by
-    # dimension (3) and tag (box).
+    # Embed the model entities of dimension 'dim', and tags 'tag' in the other model entity which is given by
+    # dimension (3) and tag (box)
     model.mesh.embed(2, [tag for dim, tag in fractures], 3, box)
 
     # define physical id of volume and its boundaries
