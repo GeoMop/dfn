@@ -20,6 +20,14 @@ gmsh.graphics
 gmsh.fltk
 gmsh.onelab
 gmsh.logger
+
+gmsh_api, issues:
+- terrible interface to fields
+- get_boundary not part of geometry model (occ/geo), need lot of synchronizations
+- all existing dimtags are meshed not only those with assigned physical groups
+- physical groups are not assigned to the objects, but groups are formed from objects, 
+  possible error having single object in more physical groups
+- 
 """
 
 class Options:
@@ -120,6 +128,7 @@ class Geometry:
         print("GMSH initialized")
 
         self._region_names = {}
+        self._need_synchronize = False
 
 
         gmsh.option.setNumber("General.Terminal", kwargs.get('verbose', False))
@@ -145,15 +154,19 @@ class Geometry:
     def rectangle(self, xy_sides=[1, 1], center=[0, 0, 0]):
         xy_sides.append(0)
         corner = np.array(center) - np.array(xy_sides) / 2
-        return self.object(2, self.model.addRectangle(*corner.tolist(), *xy_sides[0:2]), )
+        rec_tag = self.model.addRectangle(*corner.tolist(), *xy_sides[0:2])
+        self._need_synchronize = True
+        return self.object(2, rec_tag)
 
     def box(self, sides, center=[0, 0, 0]):
         corner = np.array(center) - np.array(sides) / 2
         box_tag = self.model.addBox(*corner, *sides)
+        self._need_synchronize = True
         return self.object(3, box_tag)
 
     def cylinder(self, r=1, axis=[0, 0, 1], center=[0, 0, 0]):
         cylinder_tag = self.model.addCylinder(*center, *axis, r)
+        self._need_synchronize = True
         return self.object(3, cylinder_tag)
 
     def synchronize(self):
@@ -161,7 +174,9 @@ class Geometry:
         Not clear which actions requires synchronization. Seems that it should be called after calculation of
         new shapes and before new shapes are added explicitely.
         """
-        self.model.synchronize()
+        if self._need_synchronize:
+            self.model.synchronize()
+            self._need_synchronize = False
 
     def group(self, obj_list):
         if type(obj_list) is ObjectSet:
@@ -183,6 +198,7 @@ class Geometry:
         point_tags = [self.model.addPoint(*corner) for corner in corners]
         lines = [self.model.addLine(point_tags[i - 1], point_tags[i]) for i in range(4)]
         cl = self.model.addCurveLoop(lines)
+        self._need_synchronize = True
         return self.model.addPlaneSurface([cl])
 
     def make_fractures(self, fractures, base_shape: 'ObjectSet', set_name="fractures"):
@@ -204,6 +220,7 @@ class Geometry:
         return fracture_fragments
 
     def _assign_physical_groups(self, obj):
+        self.synchronize()
         reg_to_tags = {}
         reg_names = defaultdict(set)
 
@@ -252,6 +269,9 @@ class Geometry:
         if filename is None:
             filename = self.model_name
         gmsh.write(filename + '.msh')
+
+    def show(self):
+        gmsh.fltk.run()
 
     def get_region_name(self, name):
         region = self._region_names.get(name, Region.get(name))
@@ -309,6 +329,12 @@ class Mesh:
         # Minimum number of points used to mesh a (non-straight) curve
 
 
+class BoolOperationError(Exception):
+    pass
+
+class GetBoundaryError(Exception):
+    pass
+
 class ObjectSet:
     def __init__(self, factory: Geometry, dim_tags: List[DimTag], regions: List[Region]) -> None:
         self.factory = factory
@@ -346,21 +372,33 @@ class ObjectSet:
 
     def translate(self, vector):
         self.factory.model.translate(self.dim_tags, *vector)
+        self.factory._need_synchronize = True
         return self
 
     def rotate(self, axis, angle, center=[0, 0, 0]):
         self.factory.model.rotate(self.dim_tags, *center, *axis, angle)
+        self.factory._need_synchronize = True
         return self
 
     def scale(self, scale_vector, center=[0, 0, 0]):
         self.factory.model.dilate(self.dim_tags, *center, *scale_vector)
+        self.factory._need_synchronize = True
         return self
 
     def copy(self) -> 'ObjectSet':
-        return ObjectSet(self.factory, self.factory.model.copy(self.dim_tags), self.regions)
+        copy_tags = self.factory.model.copy(self.dim_tags)
+        self.factory._need_synchronize = True
+        return ObjectSet(self.factory, copy_tags, self.regions)
 
     def get_boundary(self, combined=False):
         """
+        Get the boundary of the model entities dimTags.
+        Return in outDimTags the boundary of the individual entities
+        (if combined is false) or the boundary of the combined geometrical shape
+        formed by all input entities (if combined is true).
+        Return tags multiplied by the sign of the boundary entity if oriented is true.
+        Apply the boundary operator recursively down to dimension 0 (i.e. to points) if recursive is true.
+
         derive_regions - if combined True, make derived boundary regions, other wise default regions are used
         combined=True ... omit fracture intersetions (boundary of combined object)
         combined=False ... give also intersections (boundary of indiviual objects)
@@ -368,9 +406,40 @@ class ObjectSet:
         TODO: some support for oriented=True (returns signed tag according to its orientation)
               recursive=True (seems to provide boundary nodes)
         """
-        dimtags = gmsh.model.getBoundary(self.dim_tags, combined=combined, oriented=False)
+        self.factory.synchronize()
+        try:
+            dimtags = gmsh.model.getBoundary(self.dim_tags, combined=combined, oriented=False)
+        except ValueError as err :
+            message = "\nobj dimtags: {}".format(str(self.dim_tags[:10]))
+            raise GetBoundaryError(message) from err
         regions = [Region.default_region[dim] for dim, tag in dimtags]
         return ObjectSet(self.factory, dimtags, regions)
+
+    def split_by_region(self):
+        """
+        Split objects in ObjectSet into ObjectSets one per region.
+        :return: list of ObjectSets
+        """
+        reg_to_tags = {}
+        # collect tags of regions
+        for reg, dimtag in self.regdimtag():
+            dim, tag = dimtag
+            reg.complete(dim)
+            reg_to_tags.setdefault(reg.id, (reg, []))
+            reg_to_tags[reg.id][1].append(dimtag)
+        reg_sets = [ObjectSet(self.factory, dimtags, [reg]) for reg, dimtags in reg_to_tags.values()]
+        return reg_sets
+
+
+    def get_boundary_per_region(self):
+        reg_sets = self.split_by_region()
+        b_sets = []
+        for rset in reg_sets:
+            reg = rset.regions[0]
+            b_reg = reg.get_boundary()
+            boundary = rset.get_boundary(combined=True).set_region(b_reg)
+            b_sets.append(boundary)
+        return b_sets
 
     def common_dim(self, dim_tags=None):
         if dim_tags is None:
@@ -430,7 +499,11 @@ class ObjectSet:
 
     def _apply_operation(self, tool_objects, operation):
         tool_objects = self.factory.group(tool_objects)
-        new_tags, old_tags_map = operation(self.dim_tags, tool_objects.dim_tags)
+        try:
+            new_tags, old_tags_map = operation(self.dim_tags, tool_objects.dim_tags, removeObject=True, removeTool=True)
+        except ValueError as err :
+            message = "\nobj dimtags: {}\ntool dimtags: {}".format(str(self.dim_tags[:10]), str(tool_objects.dim_tags[:10]))
+            raise BoolOperationError(message) from err
 
         # assign regions
         assert len(self.regions) == len(self.dim_tags), (len(self.regions), len(self.dim_tags))
@@ -445,6 +518,7 @@ class ObjectSet:
         # new_obj._previous_map = old_tags_map
 
         # invalidate original objects
+        self.factory._need_synchronize = True
         self.invalidate()
         tool_objects.invalidate()
         return new_obj

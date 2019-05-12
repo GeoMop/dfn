@@ -58,9 +58,9 @@ def generate_mesh():
 
 
     # Main box
-    factory = gmsh.Geometry('occ', "three_frac_symmetric")
+    factory = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
     box = factory.box(3 * [box_size]).set_region("box")
-    b_box = box.get_boundary(combined=True)
+    b_box = box.get_boundary(combined=True).copy()
 
     # two vertical cut-off wells, just permeable part
     well_z_shift = -well_length/2
@@ -72,8 +72,8 @@ def generate_mesh():
                     .translate([0, 0, well_z_shift]).translate(right_center)
 
 
-    b_right_well = right_well.get_boundary()
-    b_left_well = left_well.get_boundary()
+    b_right_well = right_well.get_boundary().copy()
+    b_left_well = left_well.get_boundary().copy()
 
     # fracutres
     fractures = [
@@ -87,44 +87,51 @@ def generate_mesh():
 
 
     box_drilled = box.cut([left_well, right_well])
-    b_box_drilled = box_drilled.get_boundary()
+    cut_fractures = all_fractures.intersect(box_drilled.copy())
+    #b_box_drilled = box_drilled.get_boundary()
 
-    b_box = b_box.intersect(b_box_drilled.copy()).set_region(".outer_box")
-    b_left_well = b_left_well.intersect(b_box_drilled.copy()).set_region(".left_well")
-    b_right_well = b_right_well.intersect(b_box_drilled.copy()).set_region(".right_well")
 
     # 3d and surface fragmented by fractures
-    box_and_boundary = factory.group([box_drilled, b_box, b_left_well, b_right_well])
-    box_and_boundary_fr = box_and_boundary.fragment(all_fractures.copy())
+    #box_and_boundary = factory.group([box_drilled, b_box, b_left_well, b_right_well])
+    #box_and_boundary = factory.group([box_drilled])
+    box_fr = box_drilled.fragment(cut_fractures.copy())
+    b_box_fr = box_fr.get_boundary()
+
+    b_box = b_box_fr.copy().intersect(b_box.copy()).set_region(".outer_box")
+    b_left_well = b_box_fr.copy().intersect(b_left_well.copy()).set_region(".left_well")
+    b_right_well = b_box_fr.intersect(b_right_well.copy()).set_region(".right_well")
+    b_box_fr_all = factory.group([b_box, b_left_well, b_right_well])
 
     # fracture boundaries
-    b_fractures_box = all_fractures.copy().intersect(b_box.copy()).prefix_regions(".box_")
-    b_left_well = all_fractures.copy().intersect(b_left_well.copy()).prefix_regions(".left_well_")
-    b_right_well = all_fractures.copy().intersect(b_right_well.copy()).prefix_regions(".right_well_")
+    b_fractures = factory.group(cut_fractures.get_boundary_per_region())
+    b_fractures_box = b_fractures.copy().intersect(b_box).prefix_regions(".box_")
+    b_left_well = b_fractures.copy().intersect(b_left_well).prefix_regions(".left_well_")
+    b_right_well = b_fractures.copy().intersect(b_right_well).prefix_regions(".right_well_")
+    fracture_boundaries = factory.group([b_fractures_box, b_left_well, b_right_well])
 
     # fracures
-    cut_fractures = all_fractures.intersect(box_drilled.copy())
 
-    box_drilled_fr = box_drilled.fragment(cut_fractures.copy())
-    b_box = b
+
+    #box_drilled_fr = box_drilled.fragment(cut_fractures.copy())
+
 
     # define 3d volume and embed fractures into it
-    factory.synchronize()
 
     min_el_size = well_radius
     fracture_el_size = box_size / 20
     fracture_size = 1000
     max_el_size = box_size / 5
 
-    frac_bdry = cut_fractures.get_boundary()
-    distance_field = field.distance_edges([tag for dm, tag in frac_bdry.dim_tags if dm == 1])
+    distance_field = field.distance_edges([tag for dm, tag in b_fractures.dim_tags if dm == 1])
     threshold = field.threshold(distance_field, (0, fracture_el_size), (fracture_size, max_el_size))
     field.set_mesh_step_field(threshold)
 
+    #factory.make_mesh([box_and_boundary_fr, fracture_boundaries, cut_fractures])
+
     factory.write_brep()
-    factory.make_mesh([box_drilled, cut_fractures])
+    factory.make_mesh([box_fr, b_box_fr_all, cut_fractures, fracture_boundaries])
     factory.write_mesh()
-    gmsh.fltk.run()
+    factory.show()
 
 
 
