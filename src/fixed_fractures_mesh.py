@@ -88,6 +88,8 @@ class Region:
             assert self.dim == dim, (self.dim, dim)
         return self
 
+    def set_unique_name(self, idx):
+        self.name = "{}_{}".format(self.name, idx)
 
 Region.default_region = [Region.get("default_{}d".format(dim), dim) for dim in range(4)]
 
@@ -189,12 +191,23 @@ class GMSHFactory:
 
     def _assign_physical_groups(self, obj):
         reg_to_tags = {}
+        reg_names = defaultdict(set)
+
+        # collect tags of regions
         for reg, dimtag in obj.regdimtag():
             dim, tag = dimtag
             reg.complete(dim)
             reg_to_tags.setdefault(reg.id, (reg, []) )
             reg_to_tags[reg.id][1].append(tag)
+            reg_names[reg.name].add(reg.id)
 
+        # make used region names unique
+        for id_set in reg_names.values():
+            if len(id_set) > 1:
+                for i, id in enumerate(sorted(id_set)):
+                    reg_to_tags[id][0].set_unique_name(i)
+
+        # set physical groups
         for reg, tags in reg_to_tags.values():
             reg._gmsh_id = gmsh.model.addPhysicalGroup(reg.dim, tags, tag=-1)
             gmsh.model.setPhysicalName(reg.dim, reg._gmsh_id, reg.name)
