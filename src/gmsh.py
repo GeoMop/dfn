@@ -31,20 +31,54 @@ gmsh_api, issues:
 """
 
 class Options:
-    def __init__(self, gmsh_class):
-        self.gmsh_class
-        self.names_map = {}
+    """
+    Auxiliary class to set GMSH options as a class attributes:
 
-    def add(self, gmsh_name, default):
+    my_options.option_name = value
+
+    Valid option names are defined in the constructor of the derived class as
+    their own attributes. After that call of 'finish_init' will:
+    1. collect existing attributes
+    2. set appropriate GMSH options to default values
+    3. set __setattr__ method so that furhter assignements to attribute are translated to
+       setting the GMSH option.
+
+    """
+    def __init__(self, prefix):
+        self.prefix = prefix
+        # Prefix of the GMSH option, e.g. 'Mesh.'
+        self.names_map = {}
+        # Dictionary of valid options: option_name -> type
+        self.__setattr__ = self.init_setattr
+
+
+    def finish_init(self):
+        self.__setattr__ = self.instance_setattr
+
+
+    def _add(self, gmsh_name, default):
+        """
+        Define new option with name 'gmsh_name'.
+        :param default: either initial value or just type (enum, bool, float, int, str)
+
+        If default value is provided it is passed to GMSH immediately.
+        """
         if isinstance(default, type):
             option_type = default
         else:
             option_type = type(default)
+            self.instance_setattr(gmsh_name, default)
         self.names_map[gmsh_name] = (gmsh_name, option_type)
-        self.__setattr__(gmsh_name, default)
 
-    # TODO: set option type in 'add' through default value ar type
-    def __setattr__(self, key, value):
+
+    def init_setattr(self, key, value):
+        """
+        Syntactic sugar for _add.
+        """
+        self._add(key, value)
+
+
+    def instance_setattr(self, key, value):
         assert key in self.names_map
         gmsh_name, option_type = self.names_map[key]
         assert type(value) is option_type
@@ -138,13 +172,13 @@ class Geometry:
         gmsh.option.setNumber("Geometry.ToleranceBoolean", 0)
         gmsh.option.setNumber("Geometry.MatchMeshTolerance", 0)
 
-        gmsh.option.setNumber("Mesh.ToleranceInitialDelaunay", 1e-12)
-        gmsh.option.setNumber("Mesh.CharacteristicLengthFromPoints", 1)
-        gmsh.option.setNumber("Mesh.CharacteristicLengthFromCurvature", 1)
-        gmsh.option.setNumber("Mesh.CharacteristicLengthExtendFromBoundary", 1)
-        # gmsh.option.setNumber("Mesh.CharacteristicLengthMin", max_el_size*0.01)
-        # gmsh.option.setNumber("Mesh.CharacteristicLengthMax", max_el_size)
-        # gmsh.option.setNumber("Mesh.MinimumCurvePoints", 5)
+
+
+    def get_region_name(self, name):
+        region = self._region_names.get(name, Region.get(name))
+        self._region_names[name] = region
+        return region
+
 
     def object(self, dim, tag):
         return ObjectSet(self, [(dim, tag)], [Region.default_region[dim]])
@@ -245,38 +279,41 @@ class Geometry:
             reg._gmsh_id = gmsh.model.addPhysicalGroup(reg.dim, tags, tag=-1)
             gmsh.model.setPhysicalName(reg.dim, reg._gmsh_id, reg.name)
 
-    def make_mesh(self, objects: List['ObjectSet']) -> None:
+    def make_mesh(self, objects: List['ObjectSet'], dim=3) -> None:
         """
-        Mesh given objects.
-        :param objects:
-        :return:
+        Generate mesh for given objects.
+        :param dim: Set highest dimension to mesh.
         """
 
         self._assign_physical_groups(self.group(objects))
-
         self.synchronize()
+
         gmsh.model.mesh.generate(3)
         gmsh.model.mesh.removeDuplicateNodes()
         bad_entities = gmsh.model.mesh.getLastEntityError()
-        print("Bad entities:", bad_entities)
+        if bad_entities:
+            print("Bad entities:", bad_entities)
+
+
 
     def write_brep(self, filename=None):
         if filename is None:
             filename = self.model_name
         gmsh.write(filename + '.brep')
 
+
+
     def write_mesh(self, filename=None):
         if filename is None:
             filename = self.model_name
-        gmsh.write(filename + '.msh')
+        gmsh.write(filename + '.msh2')
+
 
     def show(self):
         gmsh.fltk.run()
 
-    def get_region_name(self, name):
-        region = self._region_names.get(name, Region.get(name))
-        self._region_names[name] = region
-        return region
+
+
 
     def __del__(self):
         gmsh.finalize()
@@ -284,7 +321,7 @@ class Geometry:
 
 
 
-class Mesh:
+class MeshOptions(Options):
     class Algo2d(enum.IntEnum):
         MeshAdapt = 1
         Automatic = 2
@@ -301,33 +338,31 @@ class Mesh:
         RTree = 9
         HXT = 10
 
-
-
     def __init__(self):
-        self.option = Options('Mesh.')
+        super().__init__('Mesh.')
 
-        self.option.add('Algorithm', self.Algo2d.Automatic)
+        self.Algorithm = self.Algo2d.Automatic
         # 2D mesh algorithm
-        self.option.add('Algorithm3D', self.Algo3d.Delaunay)
+        self.Algorithm3D = self.Algo3d.Delaunay
         # 3D mesh algorithm
-        self.option.add('ToleranceInitialDelaunay', 1e-12)
+        self.ToleranceInitialDelaunay = 1e-12
         # Tolerance for initial 3D Delaunay mesher
-        self.option.add('CharacteristicLengthFromPoints', True)
+        self.CharacteristicLengthFromPoints = True
         # Compute mesh element sizes from values given at geometry points
-        self.option.add('CharacteristicLengthFromCurvature', True)
+        self.CharacteristicLengthFromCurvature = True
         # Automatically compute mesh element sizes from curvature (experimental)
-        self.option.add('CharacteristicLengthExtendFromBoundary', int)
+        self.CharacteristicLengthExtendFromBoundary = int
         # Extend computation of mesh element sizes from the boundaries into the interior
         # (for 3D Delaunay, use 1: longest or 2: shortest surface edge length)
-        self.option.add('CharacteristicLengthMin', float)
+        self.CharacteristicLengthMin = float
         # Minimum mesh element size
-        self.option.add('CharacteristicLengthMax', float)
+        self.CharacteristicLengthMax = float
         # Maximum mesh element size
-        self.option.add('CharacteristicLengthFactor', float)
+        self.CharacteristicLengthFactor = float
         # Factor applied to all mesh element sizes
-        self.option.add('MinimumCurvePoints', 6)
+        self.MinimumCurvePoints = 6
         # Minimum number of points used to mesh a (non-straight) curve
-
+        self.finish_init()
 
 class BoolOperationError(Exception):
     pass
