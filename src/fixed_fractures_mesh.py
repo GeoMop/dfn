@@ -5,6 +5,32 @@ import numpy as np
 import field
 import gmsh
 
+"""
+TODO:
+- unique names during region creation (fractures_0,1, ...)
+- why separate boundary regions on wells
+- keep all dimtags, remove which are not requested for meshing, test if copy of boundary dimtags are discretized well
+- improve meshstep choice, have coarser on box boundary, smaller wells
+- mesh into old format
+- cleanup
+
+- class for statistic fracture
+- full class for single generated fracture
+- random fractures in the cube (use SKB)
+- random fields
+- flow123d on random fractures
+
+- separate all fractures into coarse and fine mesh
+- for every fine fracture get intersected elements in the coarse mesh
+possible ways:
+    - get bounding box for a fracture gmsh.model.getBoundingBox, 
+      find elements in the box
+    - try to add coarse mesh into a model using addDiscreteEntity
+    - load fine fractures into flow123d, marked as boundary or 'tool region' (double dots)
+      use tool fractures to identify elements (similar to rivers (1d intersectiong 2d)
+      use field that depends on intersection surface and fracture properties
+"""
+
 
 @attr.s(auto_attribs=True)
 class FractureData:
