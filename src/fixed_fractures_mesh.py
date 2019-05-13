@@ -168,7 +168,7 @@ def generate_mesh():
     mesh.MinimumCurvePoints = 5
 
     factory.make_mesh(mesh_groups)
-    factory.write_mesh()
+    factory.write_mesh(format=gmsh.MeshFormat.msh2)
 
     factory.show()
 

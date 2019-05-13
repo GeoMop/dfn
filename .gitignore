@@ -92,6 +92,7 @@ src/config/*.yaml
 
 # Geometry test result files
 src/*.msh
+src/*.msh2
 src/*.brep
 src/*.geo
 
