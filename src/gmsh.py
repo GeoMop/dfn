@@ -211,9 +211,6 @@ class Region:
         """
         return Region(dim, cls.get_region_id(), name)
 
-    def get_boundary(self):
-        b_reg = Region(self.dim - 1, self.get_region_id(), "." + self.name)
-        return b_reg
 
     def complete(self, dim):
         """
@@ -339,7 +336,7 @@ class Geometry:
         return self.model.addPlaneSurface([cl])
 
 
-    def fragment(self, *object_sets):
+    def fragment(self, *object_sets: 'ObjectSet') -> List['ObjectSet']:
         """
         Fragment given objects mutually return list of fragmented objects.
         :param object_sets:
@@ -372,14 +369,13 @@ class Geometry:
 
 
 
-    def make_fractures(self, fractures, base_shape: 'ObjectSet', set_name="fractures"):
+    def make_fractures(self, fractures, base_shape: 'ObjectSet'):
         # From given fracture date list 'fractures'.
         # transform the base_shape to fracture objects
         # fragment fractures by their intersections
         # return dict: fracture.region -> GMSHobject with corresponding fracture fragments
         shapes = []
         for fr in fractures:
-            fr.region = Region.get(set_name)
             shape = base_shape.copy()
             shape = shape.scale([fr.rx, fr.ry, 1]) \
                 .rotate(axis=fr.rotation_axis, angle=fr.rotation_angle) \
@@ -518,16 +514,19 @@ class ObjectSet:
         self.regions = [region.complete(dim) for dim, tag in self.dim_tags]
         return self
 
-    def prefix_regions(self, prefix: str) -> None:
+    def modify_regions(self, format: str) -> None:
         """
-        Set given region to all self.dimtags.
-        Create a new region if just a string is given.
-        :return: self
+        For every of object's regions create a new region with a name given by the 'format'
+        and original region name.
+        : param format: a string format with single placeholder.
+        E.g. to prefix all region names by 'XY_' use format "XY_{}".
+
+        TODO: allow to include: dim, tag, entity type into the format string through named placehodders
         """
         regions = []
         for region in self.regions:
-            new_name = prefix + region.name
-            new_region = Region.get(new_name)
+            new_name = format.format(region.name)
+            new_region = self.factory.get_region_name(new_name)
             regions.append(new_region)
         self.regions = regions
         return self
@@ -581,6 +580,7 @@ class ObjectSet:
         """
         Split objects in ObjectSet into ObjectSets one per region.
         :return: list of ObjectSets
+        TODO: Return Group
         """
         reg_to_tags = {}
         # collect tags of regions
@@ -594,6 +594,11 @@ class ObjectSet:
 
 
     def split_by_dimension(self):
+        """
+        Split objects in ObjectSet into ObjectSets of same dimansion.
+        :return: list of ObjectSets
+        TODO: Return Group
+        """
         dimtags = [[], [], [], []]
         regions = [[], [], [], []]
         for dimtag, reg in self.dimtagreg():
@@ -607,17 +612,28 @@ class ObjectSet:
 
 
 
-    def get_boundary_per_region(self):
+    def get_boundary_per_region(self, format=".{}"):
+        """
+        Split object by regions, call get_boundary for individual region subobjects and assign
+        related boundary regions.
+        :return:
+        TODO: Return Group
+        """
         reg_sets = self.split_by_region()
         b_sets = []
         for rset in reg_sets:
             reg = rset.regions[0]
-            b_reg = reg.get_boundary()
+            b_reg_name = format.format(reg.name)
+            b_reg = Region.get(b_reg_name, dim=reg.dim - 1)
+            #self.factory.get_region_name()
+            print(reg, b_reg)
+
             boundary = rset.get_boundary(combined=True).set_region(b_reg)
             b_sets.append(boundary)
         return b_sets
 
-    def common_dim(self, dim_tags=None):
+
+    def have_common_dim(self, dim_tags=None):
         if dim_tags is None:
             dim_tags = self.dim_tags
         assert dim_tags
@@ -653,7 +669,7 @@ class ObjectSet:
         :return:
         """
         sc = self.copy()
-        tool = self.factory.group(*tool_objects)
+        tool = self.factory.group(*tool_objects).copy()
         objs, map = self.factory.model.intersect(sc.dim_tags, tool.dim_tags)
         tool.invalidate()
         sc.invalidate()
@@ -672,9 +688,12 @@ class ObjectSet:
 
     def split_by_cut(self, *tool_objects: 'ObjectSet') -> Tuple['ObjectSet', 'ObjectSet', 'ObjectSet', 'ObjectSet']:
         """
-        Cut self object and return both cut object and remainder object.
+        Cut self object and return both cut object and the remainder object.
+        Doesn't work preprely for boundaries due to a bug i OCC.
+
         :param tool_objects: any number of ObjectSet
         :return: cut objectset, intersection objectset, tool remainder objectset
+        TODO: Return Group
         """
         factory = self.factory
         tool_objects = self.factory.group(*tool_objects)
@@ -703,7 +722,7 @@ class ObjectSet:
         self.regions = regions
 
     def _apply_operation(self, tool_objects, operation):
-        tool_objects = self.factory.group(*tool_objects)
+        tool_objects = self.factory.group(*tool_objects).copy()
         try:
             new_tags, old_tags_map = operation(self.dim_tags, tool_objects.dim_tags, removeObject=True, removeTool=True)
         except ValueError as err :
@@ -729,12 +748,27 @@ class ObjectSet:
         return new_obj
 
     def cut(self, *tool_objects) -> 'ObjectSet':
+        """
+        Cut self object with 'tool_objects'.
+        Returns the cut object, self is destroyed, tool_objects are preserved (we use their copy).
+        Regions set on self are transfered to the result.
+        """
         return self._apply_operation(tool_objects, self.factory.model.cut)
 
     def intersect(self, *tool_objects) -> 'ObjectSet':
+        """
+        Intersect self object with 'tool_objects'.
+        Returns the intersected object, self is destroyed, tool_objects are preserved (we use their copy).
+        Regions set on self are transfered to the result.
+        """
         return self._apply_operation(tool_objects, self.factory.model.intersect)
 
     def fragment(self, *tool_objects) -> 'ObjectSet':
+        """
+        Fragment self object with 'tool_objects'.
+        Returns the fragmented object, self is destroyed, tool_objects are preserved (we use their copy).
+        Regions set on self are transfered to the result.
+        """
         return self._apply_operation(tool_objects, self.factory.model.fragment)
 
     def invalidate(self):
