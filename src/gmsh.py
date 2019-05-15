@@ -4,6 +4,8 @@ from typing import TypeVar, Tuple, Optional, List
 from collections import defaultdict
 from gmsh_api import gmsh
 import numpy as np
+import itertools
+
 """
 Structure:
 gmsh
@@ -29,6 +31,9 @@ gmsh_api, issues:
   possible error having single object in more physical groups
 - Mesh.Format option - doc do not support gmsh 2.0 format
   gmsh.write function seems to ignore the format and use extensions which are not documented
+- gmsh.model.occ.setMeshSize - seems have no effect, in particular in combination with getBoundary
+- no constant field
+- gmsh.model.occ.removeAllDuplicates ... doesn't work
 """
 
 
@@ -137,6 +142,55 @@ class Options:
             raise ValueError("Unsupported value type {} for GMSH option type.")
 
 
+class MeshOptions(Options):
+    def __init__(self):
+        super().__init__('Mesh.')
+        self.Algorithm = Algorithm2d.Automatic
+        # 2D mesh algorithm
+        self.Algorithm3D = Algorithm3d.Delaunay
+        # 3D mesh algorithm
+        self.ToleranceInitialDelaunay = 1e-12
+        # Tolerance for initial 3D Delaunay mesher
+        self.CharacteristicLengthFromPoints = True
+        # Compute mesh element sizes from values given at geometry points
+        self.CharacteristicLengthFromCurvature = True
+        # Automatically compute mesh element sizes from curvature (experimental)
+        self.CharacteristicLengthExtendFromBoundary = int
+        # Extend computation of mesh element sizes from the boundaries into the interior
+        # (for 3D Delaunay, use 1: longest or 2: shortest surface edge length)
+        self.CharacteristicLengthMin = float
+        # Minimum mesh element size
+        self.CharacteristicLengthMax = float
+        # Maximum mesh element size
+        self.CharacteristicLengthFactor = float
+        # Factor applied to all mesh element sizes
+        self.MinimumCurvePoints = 6
+        # Minimum number of points used to mesh a (non-straight) curve
+        self.finish_init()
+
+
+class GeometryOptions(Options):
+    def __init__(self):
+        super().__init__('Geometry.')
+
+        self.Tolerance = 1e-08
+        # Geometrical tolerance
+        self.ToleranceBoolean = 0
+        # Geometrical tolerance for boolean operations
+        self.MatchMeshTolerance = 1e-06
+        # Tolerance for matching mesh and geometry
+
+        self.OCCFixDegenerated = False
+        # Fix degenerated edges/faces in STEP, IGES and BRep models
+        self.OCCFixSmallEdges = False
+        # Fix small edges in STEP, IGES and BRep models
+        self.OCCFixSmallFaces = False
+        # Fix small faces in STEP, IGES and BRep models
+        self.OCCBooleanPreserveNumbering = True
+        # Try to preserve numbering of entities through OCC boolean operations
+        self.finish_init()
+
+
 @attr.s(auto_attribs=True)
 class Region:
     dim: Optional[int]
@@ -174,10 +228,12 @@ class Region:
     def set_unique_name(self, idx):
         self.name = "{}_{}".format(self.name, idx)
 
-
+# Initialize class attribute
 Region.default_region = [Region.get("default_{}d".format(dim), dim) for dim in range(4)]
 
-GMSHmodel = TypeVar('GMSHmodel', gmsh.model.occ, gmsh.model.geo)
+
+
+
 DimTag = Tuple[int, int]
 
 
@@ -213,10 +269,6 @@ class Geometry:
 
         gmsh.option.setNumber("General.Terminal", kwargs.get('verbose', False))
 
-        # set options
-        gmsh.option.setNumber("Geometry.Tolerance", 0)
-        gmsh.option.setNumber("Geometry.ToleranceBoolean", 0)
-        gmsh.option.setNumber("Geometry.MatchMeshTolerance", 0)
 
 
 
@@ -258,9 +310,13 @@ class Geometry:
             self.model.synchronize()
             self._need_synchronize = False
 
-    def group(self, obj_list):
-        if type(obj_list) is ObjectSet:
-            return obj_list
+
+    def group(self, *obj_list: 'ObjectSet') -> 'ObjectSet':
+        """
+        Group any numberf of ObjectSets into a single one.
+        :param obj_list:
+        :return:
+        """
         if len(obj_list) == 1:
             return obj_list[0]
         all_dim_tags = [dim_tag
@@ -271,6 +327,7 @@ class Geometry:
                    for reg in obj.regions]
         return ObjectSet(self, all_dim_tags, regions)
 
+
     def make_rectangle(self, scale) -> int:
         # Vertices of the rectangle
         shifts = np.array([(1, 1, 0), (1, -1, 0), (-1, 1, 0), (-1, -1, 0)])
@@ -280,6 +337,40 @@ class Geometry:
         cl = self.model.addCurveLoop(lines)
         self._need_synchronize = True
         return self.model.addPlaneSurface([cl])
+
+
+    def fragment(self, *object_sets):
+        """
+        Fragment given objects mutually return list of fragmented objects.
+        :param object_sets:
+        :return:
+        """
+        cumulsizes = list(itertools.accumulate((o.size for o in object_sets)))
+        all_dimtags = list(itertools.chain(*[o.dim_tags for o in object_sets]))
+
+        try:
+            new_tags, tags_map = self.model.fragment(all_dimtags, [], removeObject=True, removeTool=True)
+        except ValueError as err :
+            message = "\nall dimtags: {}, ...".format(str(all_dimtags[:20]))
+            raise BoolOperationError(message) from err
+
+        # assign regions
+        new_sets = []
+        begin = 0
+        assert cumulsizes[-1] == len(tags_map), str(tags_map[cumulsizes[-1]:])
+        for o, end in zip(object_sets, cumulsizes):
+            dim_tag_map = tags_map[begin:end]
+            newset = [ObjectSet(self, new_subtags, [reg])
+                        for reg, new_subtags in zip(o.regions, dim_tag_map)]
+            newset = self.group(*newset)
+            new_sets.append(newset)
+            begin = end
+            o.invalidate()
+
+        self._need_synchronize = True
+        return new_sets
+
+
 
     def make_fractures(self, fractures, base_shape: 'ObjectSet', set_name="fractures"):
         # From given fracture date list 'fractures'.
@@ -296,7 +387,7 @@ class Geometry:
                 .set_region(fr.region)
             shapes.append(shape)
 
-        fracture_fragments = self.group(shapes).fragment([])
+        fracture_fragments = self.fragment(*shapes)
         return fracture_fragments
 
     def _assign_physical_groups(self, obj):
@@ -305,7 +396,7 @@ class Geometry:
         reg_names = defaultdict(set)
 
         # collect tags of regions
-        for reg, dimtag in obj.regdimtag():
+        for dimtag, reg in obj.dimtagreg():
             dim, tag = dimtag
             reg.complete(dim)
             reg_to_tags.setdefault(reg.id, (reg, []))
@@ -325,16 +416,17 @@ class Geometry:
             reg._gmsh_id = gmsh.model.addPhysicalGroup(reg.dim, tags, tag=-1)
             gmsh.model.setPhysicalName(reg.dim, reg._gmsh_id, reg.name)
 
-    def make_mesh(self, objects: List['ObjectSet'], dim=3) -> None:
+    def make_mesh(self, objects: List['ObjectSet'], dim=3, eliminate=True) -> None:
         """
         Generate mesh for given objects.
         :param dim: Set highest dimension to mesh.
         """
-
-        self._assign_physical_groups(self.group(objects))
+        group = self.group(*objects)
+        self._assign_physical_groups(group)
+        if eliminate:
+            self.keep_only(group)
         self.synchronize()
-
-        gmsh.model.mesh.generate(3)
+        gmsh.model.mesh.generate(dim)
         gmsh.model.mesh.removeDuplicateNodes()
         bad_entities = gmsh.model.mesh.getLastEntityError()
         if bad_entities:
@@ -343,6 +435,7 @@ class Geometry:
 
 
     def write_brep(self, filename=None):
+        self.synchronize()
         if filename is None:
             filename = self.model_name
         gmsh.write(filename + '.brep')
@@ -362,6 +455,19 @@ class Geometry:
             filename = "{}.{}".format(self.model_name, extension)
         gmsh.write(filename)
 
+    def remove_duplicate_entities(self):
+        self.synchronize()
+        self.model.removeAllDuplicates()
+        self._need_synchronize = True
+
+    def keep_only(self, *object_sets):
+        self.synchronize()
+        group = self.group(*object_sets)
+        all_dimtags = set(gmsh.model.getEntities())
+        remove_dimtags = all_dimtags.difference(set(group.dim_tags))
+        self.model.remove(list(remove_dimtags), recursive=False)
+
+
 
     def show(self):
         gmsh.fltk.run()
@@ -375,33 +481,6 @@ class Geometry:
 
 
 
-class MeshOptions(Options):
-
-    def __init__(self):
-        super().__init__('Mesh.')
-
-        self.Algorithm = Algorithm2d.Automatic
-        # 2D mesh algorithm
-        self.Algorithm3D = Algorithm3d.Delaunay
-        # 3D mesh algorithm
-        self.ToleranceInitialDelaunay = 1e-12
-        # Tolerance for initial 3D Delaunay mesher
-        self.CharacteristicLengthFromPoints = True
-        # Compute mesh element sizes from values given at geometry points
-        self.CharacteristicLengthFromCurvature = True
-        # Automatically compute mesh element sizes from curvature (experimental)
-        self.CharacteristicLengthExtendFromBoundary = int
-        # Extend computation of mesh element sizes from the boundaries into the interior
-        # (for 3D Delaunay, use 1: longest or 2: shortest surface edge length)
-        self.CharacteristicLengthMin = float
-        # Minimum mesh element size
-        self.CharacteristicLengthMax = float
-        # Maximum mesh element size
-        self.CharacteristicLengthFactor = float
-        # Factor applied to all mesh element sizes
-        self.MinimumCurvePoints = 6
-        # Minimum number of points used to mesh a (non-straight) curve
-        self.finish_init()
 
 class BoolOperationError(Exception):
     pass
@@ -418,6 +497,15 @@ class ObjectSet:
         else:
             assert (len(regions) == len(dim_tags))
             self.regions = regions
+
+
+    @property
+    def tags(self):
+        return [ tag for dim, tag in self.dim_tags ]
+
+    @property
+    def size(self):
+        return len(self.dim_tags)
 
     def set_region(self, region):
         """
@@ -496,13 +584,27 @@ class ObjectSet:
         """
         reg_to_tags = {}
         # collect tags of regions
-        for reg, dimtag in self.regdimtag():
+        for dimtag, reg in self.dimtagreg():
             dim, tag = dimtag
             reg.complete(dim)
             reg_to_tags.setdefault(reg.id, (reg, []))
             reg_to_tags[reg.id][1].append(dimtag)
         reg_sets = [ObjectSet(self.factory, dimtags, [reg]) for reg, dimtags in reg_to_tags.values()]
         return reg_sets
+
+
+    def split_by_dimension(self):
+        dimtags = [[], [], [], []]
+        regions = [[], [], [], []]
+        for dimtag, reg in self.dimtagreg():
+            dim, tag = dimtag
+            print(dim, tag, reg)
+            reg.complete(dim)
+            dimtags[dim].append(dimtag)
+            regions[dim].append(reg)
+        sets = [ObjectSet(self.factory, dimtags, regs) for regs, dimtags in zip(regions, dimtags)]
+        return sets
+
 
 
     def get_boundary_per_region(self):
@@ -525,54 +627,83 @@ class ObjectSet:
                 return None
         return dim
 
-    def regdimtag(self):
+    def dimtagreg(self):
         assert len(self.regions) == len(self.dim_tags)
-        return zip(self.regions, self.dim_tags)
+        return zip(self.dim_tags, self.regions)
 
-    # def assign_physical_group(self, tag):
-    #     if type(tag) is str:
-    #         id, name  = -1, tag
-    #     else:
-    #         assert type(tag) is int
-    #         id, name = tag, None
-    #     common_dim = self.common_dim()
-    #     id = gmsh.model.addPhysicalGroup(common_dim,  [tag for dim, tag in self.dim_tags], tag=id)
-    #     if name:
-    #         gmsh.model.setPhysicalName(common_dim, id, name)
-    #     self.regions = [(common_dim, id, name) for _ in self.dim_tags]
-    #     return self
 
-    # def _set_regions(self, regions):
-    #     """
-    #     Internal method to assign regions to fresh dimtags.
-    #     :param regions:
-    #     :return:
-    #     """
-    #     self.regions = []
-    #     for reg, dimtag in zip(regions, self.dim_tags):
-    #         dim, tag = dimtag
-    #         if reg:
-    #             reg_dim, reg_id, reg_name = reg
-    #             assert reg_dim == dim
-    #             gmsh.model.addPhysicalGroup(dim, [tag], tag=reg_id)
-    #         self.regions.append(reg)
+    def set_mesh_step(self, step):
+        """
+        Set mesh step 'step' to all nodes of the objects in the ObejctSet.
+        """
+        # Get boundary resursive to obtain nodes
+        self.factory.synchronize()
+        try:
+            dimtags = gmsh.model.getBoundary(self.dim_tags, combined=False, oriented=False, recursive=True)
+        except ValueError as err :
+            message = "\nobj dimtags: {}".format(str(self.dim_tags[:10]))
+            raise GetBoundaryError(message) from err
+        nodes = [(dim, tag) for dim, tag in dimtags if dim == 0]
+        gmsh.model.mesh.setSize(nodes, step)
 
-    # def embed(self, lower_dim_objects):
-    #     """
-    #     Embedding is not managed at object level, in particular it does not produce
-    #     a new object that is result of embedding. Lower dim objects can not poke out of
-    #     the higher object, not clear if they can reach its boundary.
-    #     Possibly it should be avoided and possibly not be part of GMSHobject.
-    #     """
-    #     all_dim_tags = self.factory.group(lower_dim_objects)
-    #     lower_dim = all_dim_tags.common_dim()
-    #     assert len(self.dim_tags) == 1
-    #     higher_dim, higher_tag = self.dim_tags[0]
-    #     assert  lower_dim < higher_dim
-    #     gmsh.mesh.embed(lower_dim, [tag for dim, tag in all_dim_tags.dim_tags], higher_dim, higher_tag)
+    def select_by_intersect(self, *tool_objects: 'ObjectSet') -> 'ObjectSet':
+        """
+        Make intersection with copy of the object
+        :param tool_objects:
+        :return:
+        """
+        sc = self.copy()
+        tool = self.factory.group(*tool_objects)
+        objs, map = self.factory.model.intersect(sc.dim_tags, tool.dim_tags)
+        tool.invalidate()
+        sc.invalidate()
+
+        isec = []
+        for dimtag_map, dimtagreg in zip(map, self.dimtagreg()):
+            if len(dimtag_map) > 1:
+                raise BoolOperationError("Can not select by intersect, insufficient fragmentation:\n{}".format(self.dim_tags))
+            if len(dimtag_map) == 1:
+                isec.append(dimtagreg)
+        if isec:
+            dimtags, regs = zip(*isec)
+        else:
+            return ObjectSet(self.factory, [], [])
+        return ObjectSet(self.factory, dimtags, regs)
+
+    def split_by_cut(self, *tool_objects: 'ObjectSet') -> Tuple['ObjectSet', 'ObjectSet', 'ObjectSet', 'ObjectSet']:
+        """
+        Cut self object and return both cut object and remainder object.
+        :param tool_objects: any number of ObjectSet
+        :return: cut objectset, intersection objectset, tool remainder objectset
+        """
+        factory = self.factory
+        tool_objects = self.factory.group(*tool_objects)
+        new_obj, new_tool = self.factory.fragment(self, tool_objects)
+        dict_obj = dict(new_obj.dimtagreg())
+        dict_tool = dict(new_tool.dimtagreg())
+        cut_obj = {k: dict_obj[k] for k in set(dict_obj) - set(dict_tool)}
+        cut_tool = {k: dict_tool[k] for k in set(dict_tool) - set(dict_obj)}
+        isec_set = set(dict_obj) & set(dict_tool)
+        isec_obj = {k: dict_obj[k] for k in isec_set}
+        isec_tool = {k: dict_tool[k] for k in isec_set}
+
+        out_objs = [ ObjectSet(factory, list(d.keys()), list(d.values()))
+                        for d in [cut_obj, cut_tool, isec_obj, isec_tool] ]
+        return out_objs
+
+    def set_region_from_dimtag(self):
+        """
+        Mainly for debugging purposes. Set new regions for every dimtag.
+        :return:
+        """
+        regions = []
+        for dim, tag in self.dim_tags:
+            name = "{}_{}".format(dim, tag)
+            regions.append(self.factory.get_region_name(name))
+        self.regions = regions
 
     def _apply_operation(self, tool_objects, operation):
-        tool_objects = self.factory.group(tool_objects)
+        tool_objects = self.factory.group(*tool_objects)
         try:
             new_tags, old_tags_map = operation(self.dim_tags, tool_objects.dim_tags, removeObject=True, removeTool=True)
         except ValueError as err :
@@ -583,7 +714,7 @@ class ObjectSet:
         assert len(self.regions) == len(self.dim_tags), (len(self.regions), len(self.dim_tags))
         old_tags_objects = [ObjectSet(self.factory, new_subtags, [reg])
                             for reg, new_subtags in zip(self.regions, old_tags_map[:len(self.dim_tags)])]
-        new_obj = self.factory.group(old_tags_objects)
+        new_obj = self.factory.group(*old_tags_objects)
 
         # store auxiliary information
         # TODO: remove, should not be necessary
@@ -597,13 +728,13 @@ class ObjectSet:
         tool_objects.invalidate()
         return new_obj
 
-    def cut(self, tool_objects):
+    def cut(self, *tool_objects) -> 'ObjectSet':
         return self._apply_operation(tool_objects, self.factory.model.cut)
 
-    def intersect(self, tool_objects):
+    def intersect(self, *tool_objects) -> 'ObjectSet':
         return self._apply_operation(tool_objects, self.factory.model.intersect)
 
-    def fragment(self, tool_objects):
+    def fragment(self, *tool_objects) -> 'ObjectSet':
         return self._apply_operation(tool_objects, self.factory.model.fragment)
 
     def invalidate(self):

@@ -93,3 +93,53 @@ def max(fields: List[Field]) -> Field:
     gmsh_field.setNumbers(id, "FieldsList", fields)
     return id
 
+
+def box(pt_min, pt_max, v_in, v_out=1e300):
+    """
+    The value of this field is VIn inside the box, VOut outside the box. The box is given by
+
+    pt_a <= (x, y, z) <= pt_b
+
+    Can be used instead of a constant field.
+    """
+    id = gmsh_field.add('Box')
+    gmsh_field.setNumber(id, "VIn", v_in)
+    gmsh_field.setNumber(id, "VOut", v_out)
+    gmsh_field.setNumber(id, "XMax", pt_max[0])
+    gmsh_field.setNumber(id, "XMin", pt_min[0])
+    gmsh_field.setNumber(id, "YMax", pt_max[1])
+    gmsh_field.setNumber(id, "YMin", pt_min[1])
+    gmsh_field.setNumber(id, "ZMax", pt_max[2])
+    gmsh_field.setNumber(id, "ZMin", pt_min[2])
+    return id
+
+
+def constant(value, radius):
+    """
+    Make a field with constant value = value.
+    Emulated using a box field with box containing shpere in origin with given 'readius'.
+    """
+    return box((-radius, -radius, -radius), (radius, radius, radius), v_in=value)
+
+def restrict(field:Field, *object_sets, add_boundary=False):
+    """
+    Restrict the application of a 'field' to a given list of geometrical entities: points, curves, surfaces or volumes.
+    Entities are given as object sets.
+    """
+    if not object_sets:
+        return
+
+    factory = object_sets[0].factory
+    factory.synchronize()
+    group = factory.group(object_sets)
+    if add_boundary:
+        b_group = group.get_boundary(combined=False)
+        group = factory.group([group, b_group])
+    points, edges, faces, volumes = group.split_by_dimension()
+    id = gmsh_field.add('Restrict')
+    gmsh_field.setNumber(id, "IField", field)
+    gmsh_field.setNumbers(id, "VerticesList", points.tags)
+    gmsh_field.setNumbers(id, "EdgesList", edges.tags)
+    gmsh_field.setNumbers(id, "FacesList", faces.tags)
+    gmsh_field.setNumbers(id, "RegionsList", volumes.tags)
+    return id
