@@ -1,4 +1,3 @@
-
 import attr
 from typing import Union
 import numpy as np
@@ -6,21 +5,11 @@ import field
 import gmsh
 
 """
+Script for creation of a parametrized EGS model with fixed set of fractures.
+
 TODO:
-- unique names during region creation (fractures_0,1, ...)
-- why separate boundary regions on wells
-- keep all dimtags, remove which are not requested for meshing, test if copy of boundary dimtags are discretized well
 
-Issues:
-- need more advanced cut and intersection for set of objects:
-  a_cut, b_cut, c_cut = factory.cut([a,b,c], tool)
-
-- try gmsh.model.mesh.setSize(dimtags, size)
-
-
-
-
-- class for statistic fracture
+- class for statistic fracture data
 - full class for single generated fracture
 - random fractures in the cube (use SKB)
 - random fields
