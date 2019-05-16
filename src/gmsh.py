@@ -96,15 +96,16 @@ class Options:
 
     """
     def __init__(self, prefix):
-        self.prefix = prefix
+        object.__setattr__(self, 'prefix', prefix)
         # Prefix of the GMSH option, e.g. 'Mesh.'
-        self.names_map = {}
+        object.__setattr__(self, 'names_map', {})
         # Dictionary of valid options: option_name -> type
-        self.__setattr__ = self.init_setattr
+        object.__setattr__(self, '_sa', self.init_setattr)
+
 
 
     def finish_init(self):
-        self.__setattr__ = self.instance_setattr
+        object.__setattr__(self, '_sa', self.instance_setattr)
 
 
     def _add(self, gmsh_name, default):
@@ -116,20 +117,27 @@ class Options:
         """
         if isinstance(default, type):
             option_type = default
+            self.names_map[gmsh_name] = (gmsh_name, option_type)
         else:
             option_type = type(default)
+            self.names_map[gmsh_name] = (gmsh_name, option_type)
             self.instance_setattr(gmsh_name, default)
-        self.names_map[gmsh_name] = (gmsh_name, option_type)
+
+    def __setattr__(self, key, value):
+        self._sa(key, value)
 
 
     def init_setattr(self, key, value):
         """
         Syntactic sugar for _add.
         """
+        print("init SA: ", key, value)
         self._add(key, value)
 
 
+
     def instance_setattr(self, key, value):
+        print("inst SA: ", key, value)
         assert key in self.names_map
         gmsh_name, option_type = self.names_map[key]
         assert type(value) is option_type
@@ -145,6 +153,7 @@ class Options:
 class MeshOptions(Options):
     def __init__(self):
         super().__init__('Mesh.')
+        print(self.__setattr__)
         self.Algorithm = Algorithm2d.Automatic
         # 2D mesh algorithm
         self.Algorithm3D = Algorithm3d.Delaunay
@@ -166,6 +175,7 @@ class MeshOptions(Options):
         # Factor applied to all mesh element sizes
         self.MinimumCurvePoints = 6
         # Minimum number of points used to mesh a (non-straight) curve
+        print(self.names_map)
         self.finish_init()
 
 
@@ -279,6 +289,36 @@ class Geometry:
         return ObjectSet(self, [(dim, tag)], [Region.default_region[dim]])
 
     # def objects(self, ):
+
+    def make_simplex(self, dim=3):
+        """
+        Make reference simplex
+        TODO: use own methods for construction of geometries (combine with BSplines lib.)
+        :return:
+        """
+        points = [(0,0,0), (1,0,0), (0,1,0), (0,0,1)]
+        lines = [ (0, 1), (1, 2), (2, 0), (0,3), (1,3), (2,3)]
+        faces = [ (0, 1, 2), (0, 3, 4), (2, 3, 5), (1, 4, 5)]
+        if dim == 0:
+            res = self.model.addPoint(*points[0])
+        elif dim == 1:
+            point_ids = [ self.model.addPoint(*p) for p in points[:2] ]
+            res = self.model.addLine(*point_ids)
+        elif dim == 2:
+            point_ids = [self.model.addPoint(*p) for p in points[:3]]
+            line_ids = [ self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:3]  ]
+            loop = self.model.addCurveLoop(line_ids)
+            res = self.model.addPlaneSurface([loop])
+        elif dim == 3:
+            point_ids = [self.model.addPoint(*p) for p in points[:4]]
+            line_ids = [ self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:6]  ]
+            loop_ids = [self.model.addCurveLoop([line_ids[l] for l in f]) for f in faces[:4] ]
+            face_ids = [self.model.addPlaneSurface([loop]) for loop in loop_ids]
+            surf_loop = self.model.addSurfaceLoop(face_ids)
+            res = self.model.addVolume([surf_loop])
+        return self.object(dim, res)
+
+
 
     def rectangle(self, xy_sides=[1, 1], center=[0, 0, 0]):
         xy_sides.append(0)
