@@ -1,5 +1,5 @@
 """
-1. gmsh reference simplex
+1. DONE, gmsh reference simplex
 2. generate square fracture, side a = 1,
    uniform random orientation f(theta) = sin(theta)
    centre in cube (-a sqrt(2)) (1,1,1) : (1+a sqrt(2))(1,1,1)
@@ -25,6 +25,7 @@ import gmsh
 
 geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
 ss = [geo.make_simplex(dim=d).translate([2*d, 0, 0]) for d in  range(4) ]
+
 
 el_size = 0.1
 mesh = gmsh.MeshOptions()
