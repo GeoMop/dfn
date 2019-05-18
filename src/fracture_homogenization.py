@@ -27,7 +27,7 @@ import os
 import subprocess
 import yaml
 import sys
-
+import matplotlib.pyplot as plt
 
 
 @attr.s(auto_attribs=True)
@@ -48,7 +48,8 @@ class Realization:
     el_size = 0.1
     summary = "samples.txt"
 
-    def __init__(self, base_dir, dir,  population, summary_file):
+    def __init__(self, geo, base_dir, dir,  population, summary_file):
+        self.geo = geo
         self.base_dir = base_dir
         self.sample = SimplexSample(dir = dir, fr_size=self.fr_side)
 
@@ -120,7 +121,7 @@ class Realization:
 
 
     def make_mesh(self, population):
-        self.geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
+        self.geo.reinit()
         geopt = gmsh.GeometryOptions()
         geopt.ToleranceBoolean = 1e-3
         geopt.MatchMeshTolerance = 1e-3
@@ -158,7 +159,7 @@ class Realization:
         self.geo.write_mesh(mesh_file)
         self.mesh_file = mesh_file[:-1]
         os.rename(mesh_file, self.mesh_file)
-        del self.geo
+        
 
     @staticmethod
     def substitute_placeholders(file_in, file_out, params):
@@ -254,12 +255,13 @@ class Realization:
 
 
 def create_samples(id_range, base_dir):
+    geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
+
     fracture_population = fg.FisherOrientation(0, 0, 0)
     summary_file = "summary_{}_{}.txt".format(*id_range)
-
     for id in range(id_range[0], id_range[1]):
         dir = "{:06d}".format(id)
-        x = Realization(base_dir, dir, fracture_population, summary_file)
+        x = Realization(geo, base_dir, dir, fracture_population, summary_file)
         #print(attr.asdict(x.sample))
         x.run()
     #geo.show()
@@ -321,15 +323,82 @@ def sample_pbs(n_packages):
         subprocess.run(["qsub", "-q", "charon_2h", fname])
         
         
+class Process:
+    def __init__(self, results_file):
+        self.samples = []
+        self.load_df(results_file)
+        self.precompute()
 
-def process():
-    # sym_homo_cond_tn = (homo_cond_tn + homo_cond_tn.T) / 2
-    # eigv = np.linalg.eigvals(homo_cond_tn)
-    # sym_eigv = np.linalg.eigvals(sym_homo_cond_tn)
-    # print("tensor:\n", homo_cond_tn, "\neigv: ", eigv)
-    # print("\n\nsym tensor:\n", sym_homo_cond_tn, "\neigv: ", sym_eigv)
-    # return homo_cond_tn
-    pass
+    def load_df(self, res_file):
+        with open(res_file, "r") as f:
+            for line in f:
+                line_dict = yaml.load(line)
+                self.samples.append(SimplexSample(**line_dict))
+
+    def analyse(self):
+        """
+        Main processing script.
+        :return:
+        """
+        self.symmetry_test()
+        self.eigen_val_corellation()
+
+    def precompute(self):
+        self.failed = []
+        self.correct = []
+        for i, sample in enumerate(self.samples):
+            if i % 100 == 0:
+                print("Loading ... {}%".format(100*i/len(self.samples)))
+            if sample.result_fluxes == 'None':
+                self.failed.append(sample)
+                continue
+            tensor = np.array(sample.result_fluxes, dtype=float)
+            assert tensor.shape == (3,3)
+            sample.tn = tensor
+            sample.sym_tn = (tensor + tensor.T) / 2
+            sample.sym_err = np.linalg.norm(tensor - sample.sym_tn)
+            sample.sym_relerr = sample.sym_err / np.linalg.norm(tensor)
+            eval, evec = np.linalg.eigh(sample.sym_tn)
+            sample.sym_eval = eval
+            sample.sym_evec = evec
+            self.correct.append(sample)
+        print("Failed: {}, correct: {}.".format(len(self.failed), len(self.correct)))
+
+    def symmetry_test(self):
+        """
+        Plot histogram of norm of deviation from symmetrized tensor.
+        """
+        fig = plt.figure(figsize=(20, 10))
+        ax_err = fig.add_subpolot(2, 1, 1)
+        ax_tn = fig.add_subpolot(2, 1, 2)
+
+        err = [s.sym_relerr for s in self.correct]
+        ax_err.hist(err, bins=20, range=(0, 1), density=True)
+        plt.show()
+        tn_norm = [np.linalg.norm(s.tn) for s in self.correct]
+        ax_tn.hist(tn_norm, bins=20, density=True)
+        fig.savefig("symmetry_error.pdf")
+
+    def eigen_val_corellation(self):
+        """
+        We assume there is a correlation between eigen values.
+        :return:
+        """
+        fig = plt.figure(figsize=(30, 10))
+        ax_12 = fig.add_subpolot(3, 1, 1)
+        ax_13 = fig.add_subpolot(3, 1, 2)
+        ax_23 = fig.add_subpolot(3, 1, 3)
+
+        e1 = [s.sym_eval[0] for s in self.samples]
+        e2 = [s.sym_eval[1] for s in self.samples]
+        e3 = [s.sym_eval[2] for s in self.samples]
+
+        ax_12.scatter(e1, e2)
+        ax_13.scatter(e1, e3)
+        ax_23.scatter(e2, e3)
+        fig.savefig("evals_correlation.pdf")
+
+
 
 def main():
     command = sys.argv[1]
@@ -344,9 +413,14 @@ def main():
     elif command == 'sample_pbs':
         n_packages = int(sys.argv[2])
         sample_pbs(n_packages)
-         
+
     elif command == 'process':
-        process()
+        if len(sys.argv) > 2:
+            results_file = sys.argv[2]
+        else:
+            results_file = "../homogenization/summary_merged.txt"
+        proc = Process(results_file)
+        proc.analyse()
 
 
 

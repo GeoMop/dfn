@@ -277,6 +277,8 @@ class Geometry:
         gmsh.option.setNumber("General.Terminal", kwargs.get('verbose', False))
 
 
+    def reinit(self):
+        gmsh.clear()
 
 
     def get_region_name(self, name):
