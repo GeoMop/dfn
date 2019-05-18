@@ -28,9 +28,6 @@ import subprocess
 import yaml
 import sys
 
-base_dir = "../homogenization"
-
-
 
 
 @attr.s(auto_attribs=True)
@@ -51,7 +48,8 @@ class Realization:
     el_size = 0.1
     summary = "samples.txt"
 
-    def __init__(self, dir,  population, summary_file):
+    def __init__(self, base_dir, dir,  population, summary_file):
+        self.base_dir = base_dir
         self.sample = SimplexSample(dir = dir, fr_size=self.fr_side)
 
         self.setup_dir(dir)
@@ -62,12 +60,12 @@ class Realization:
 
 
     def setup_dir(self, dir):
-        self.dir = os.path.join(base_dir, "samples", dir)
+        self.dir = os.path.join(self.base_dir, "samples", dir)
         if not os.path.exists(self.dir):
             os.makedirs(self.dir)
 
     def base_file(self, name):
-        return os.path.join(base_dir, name)
+        return os.path.join(self.base_dir, name)
 
     def sample_file(self, name):
         return os.path.join(self.dir, name)
@@ -255,20 +253,74 @@ class Realization:
 
 
 
-def create_samples(id_range):
-
-
+def create_samples(id_range, base_dir):
     fracture_population = fg.FisherOrientation(0, 0, 0)
-
     summary_file = "summary_{}_{}.txt".format(*id_range)
 
     for id in range(id_range[0], id_range[1]):
         dir = "{:06d}".format(id)
-        x = Realization(dir, fracture_population, summary_file)
+        x = Realization(base_dir, dir, fracture_population, summary_file)
         #print(attr.asdict(x.sample))
         x.run()
     #geo.show()
 
+
+pbs_script_template =\
+"""
+#!/bin/bash
+#PBS -l select=1:ncpus=1:mem=1gb:scratch_local=50mb
+#PBS -l walltime=01:00:00
+#PBS -j oe
+
+#This doesn't work, both files are droped
+## -o $HOME/workspace/dfn/homogenization/homo_{id_min}_{id_max}.o
+## -e $HOME/workspace/dfn/homogenization/homo_{id_min}_{id_max}.e
+
+# modify/delete the above given guidelines according to your job's needs
+# Please note that only one select= argument is allowed at a time.
+
+echo "Current directory: "
+pwd
+
+# cleaning of SCRATCH when error or job termination occur
+trap 'clean_scratch' TERM EXIT
+
+DATADIR="$HOME/workspace/dfn/homogenization"
+WORKDIR="$HOME/workspace/dfn/src"
+
+# copy own data into scratch directory
+cp $DATADIR/flow.sh $DATADIR/flow_in.yaml $SCRATCHDIR || exit 1
+cd $DATADIR || exit 2
+
+# add application modules necessary for computing , for example.:
+module load python-3.6.2-gcc python36-modules-gcc flow123d/3.0.0
+
+# respective execution of the computing
+python3 $WORKDIR/fracture_homogenization.py sample {id_min} {id_max} $SCRATCHDIR
+
+# copy resources from scratch directory back on disk field, if not successful, scratch is not deleted
+cp $SCRATCHDIR/summary_*  $DATADIR || export CLEAN_SCRATCH=false
+"""
+
+
+def pbs_file(id_range):
+      content = pbs_script_template.format(id_min=id_range[0], id_max=id_range[1])
+      script_name = "pbs_homo_{}_{}.sh".format(*id_range)
+      return script_name, content
+
+def sample_pbs(n_packages):
+    per_package = 1000
+    base_dir = "../homogenization"
+    for i in range(n_packages):
+        id_range = [i*per_package, (i+1)*per_package]
+        fname, content = pbs_file(id_range)
+        fname = os.path.join(base_dir, fname)
+        with open(fname, "w") as f:
+            f.write(content)        
+        print("Sumbitting: ", fname)
+        subprocess.run(["qsub", "-q", "charon_2h", fname])
+        
+        
 
 def process():
     # sym_homo_cond_tn = (homo_cond_tn + homo_cond_tn.T) / 2
@@ -280,12 +332,21 @@ def process():
     pass
 
 def main():
-     command = sys.argv[1]
-     if command == 'sample':
-         id_range = [int(token) for token in sys.argv[2:4]]
-         create_samples(id_range)
-     elif command == 'process':
-         process()
+    command = sys.argv[1]
+    if command == 'sample':
+        id_range = [int(token) for token in sys.argv[2:4]]
+        if len(sys.argv) > 4:
+            base_dir = sys.argv[4]
+        else:
+            base_dir = "../homogenization"
+        create_samples(id_range, base_dir=base_dir)
+    
+    elif command == 'sample_pbs':
+        n_packages = int(sys.argv[2])
+        sample_pbs(n_packages)
+         
+    elif command == 'process':
+        process()
 
 
 
