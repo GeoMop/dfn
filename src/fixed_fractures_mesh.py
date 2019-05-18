@@ -1,8 +1,7 @@
 import attr
 from typing import Union
 import numpy as np
-import field
-import gmsh
+from gmsh_api import gmsh
 
 """
 Script for creation of a parametrized EGS model with fixed set of fractures.
@@ -148,7 +147,7 @@ def generate_mesh():
     mesh.ToleranceInitialDelaunay = 0.01
     mesh.CharacteristicLengthFromPoints = True
     mesh.CharacteristicLengthFromCurvature = True
-    mesh.CharacteristicLengthExtendFromBoundary = True
+    mesh.CharacteristicLengthExtendFromBoundary = 1
     mesh.CharacteristicLengthMin = min_el_size
     mesh.CharacteristicLengthMax = max_el_size
     mesh.MinimumCurvePoints = 5

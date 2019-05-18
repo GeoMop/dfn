@@ -2,7 +2,7 @@ import attr
 import enum
 from typing import TypeVar, Tuple, Optional, List
 from collections import defaultdict
-from gmsh_api import gmsh
+import gmsh
 import numpy as np
 import itertools
 
@@ -34,6 +34,7 @@ gmsh_api, issues:
 - gmsh.model.occ.setMeshSize - seems have no effect, in particular in combination with getBoundary
 - no constant field
 - gmsh.model.occ.removeAllDuplicates ... doesn't work
+- seems that occ.copy() doesn't preserve boundaries, so boundary dim tags are copied twice
 """
 
 
@@ -131,20 +132,19 @@ class Options:
         """
         Syntactic sugar for _add.
         """
-        print("init SA: ", key, value)
         self._add(key, value)
 
 
 
     def instance_setattr(self, key, value):
-        print("inst SA: ", key, value)
         assert key in self.names_map
         gmsh_name, option_type = self.names_map[key]
-        assert type(value) is option_type
         full_name = self.prefix + gmsh_name
         if isinstance(value, (int, float, bool)):
+            assert option_type in {int, float, bool} or issubclass(option_type, enum.Enum), str(option_type)
             gmsh.option.setNumber(full_name, value)
         elif isinstance(value, str):
+            assert option_type is str
             gmsh.option.setString(full_name, value)
         else:
             raise ValueError("Unsupported value type {} for GMSH option type.")
@@ -185,7 +185,7 @@ class GeometryOptions(Options):
 
         self.Tolerance = 1e-08
         # Geometrical tolerance
-        self.ToleranceBoolean = 0
+        self.ToleranceBoolean = 0.0
         # Geometrical tolerance for boolean operations
         self.MatchMeshTolerance = 1e-06
         # Tolerance for matching mesh and geometry
@@ -316,6 +316,7 @@ class Geometry:
             face_ids = [self.model.addPlaneSurface([loop]) for loop in loop_ids]
             surf_loop = self.model.addSurfaceLoop(face_ids)
             res = self.model.addVolume([surf_loop])
+        self._need_synchronize = True
         return self.object(dim, res)
 
 
@@ -498,12 +499,20 @@ class Geometry:
 
     def keep_only(self, *object_sets):
         self.synchronize()
-        group = self.group(*object_sets)
+        if object_sets:
+            group_dimtags = self.group(*object_sets).dim_tags
+        else:
+            group_dimtags = []
         all_dimtags = set(gmsh.model.getEntities())
-        remove_dimtags = all_dimtags.difference(set(group.dim_tags))
-        self.model.remove(list(remove_dimtags), recursive=False)
+        remove_dimtags = all_dimtags.difference(set(group_dimtags))
+        try:
+            self.model.remove(list(remove_dimtags), recursive=False)
+        except ValueError:
+            pass
 
-
+    def all_entities(self):
+        self.synchronize()
+        return gmsh.model.getEntities()
 
     def show(self):
         gmsh.fltk.run()
@@ -815,3 +824,18 @@ class ObjectSet:
         self.factory = None
         self.dim_tags = None
         self.regions = None
+
+    def mass(self):
+        return sum((self.factory.model.getMass(dimtag) for dimtag in self.dim_tags))
+
+    def center_of_mass(self):
+        center = np.zeros(3)
+        mass_total = 0
+        for dimtag in self.dim_tags:
+            mass = self.factory.model.getMass(*dimtag)
+            center += mass*np.array(self.factory.model.getCenterOfMass(*dimtag))
+            mass_total += mass
+        if mass_total > 0.0:
+            return center/mass_total, mass_total
+        else:
+            return 0, 0

@@ -70,10 +70,6 @@ class FisherOrientation:
     # strike and dip can by understood as the first two Eulerian angles.
     dispersion: float
     # the dispersion parameter; 0 = uniform dispersion, infty - no dispersion
-    # k = ln(K)
-    # theta = invcos{   1/ln(K)  ln( K(1 - F)   +  F/K)) }
-    # K -> -infty: theta ->
-    # k
 
     @staticmethod
     def strike_dip(strike, dip, dispersion):

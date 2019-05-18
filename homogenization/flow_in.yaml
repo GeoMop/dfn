@@ -1,0 +1,47 @@
+flow123d_version: 3.1.0
+problem: !Coupling_Sequential
+  description: Homogenization of the conductivity of fractured media.
+  mesh:
+    mesh_file: <mesh_file>
+  flow_equation: !Flow_Darcy_MH
+    nonlinear_solver:
+      linear_solver: !Petsc
+        a_tol: 1.0e-15
+        r_tol: 1.0e-15
+    input_fields:
+      #- region: [.simplex_xyz_x_face, .simplex_xyz_y_face, .simplex_xyz_z_face, .fracture_xyz_x_face, .fracture_xyz_y_face, .fracture_xyz_z_face]
+        #bc_type: dirichlet
+        #bc_pressure: !FieldFormula
+           #value: "x"
+      #- region: [.simplex_yzx_x_face, .simplex_yzx_y_face, .simplex_yzx_z_face, .fracture_yzx_x_face, .fracture_yzx_y_face, .fracture_yzx_z_face]
+        #bc_type: dirichlet
+        #bc_pressure: !FieldFormula
+           #value: "x"
+      #- region: [.simplex_zxy_x_face, .simplex_zxy_y_face, .simplex_zxy_z_face, .fracture_zxy_x_face, .fracture_zxy_y_face, .fracture_zxy_z_face]
+        #bc_type: dirichlet
+        #bc_pressure: !FieldFormula
+           #value: "x"
+      - region: .BOUNDARY
+        bc_type: dirichlet
+        bc_pressure: !FieldFormula
+           value: "x"
+
+      - region: [fracture_xyz, fracture_yzx, fracture_zxy]
+        conductivity: <fr_conductivity>
+        cross_section: <fr_cross_section>
+
+      - region: [simplex_xyz, simplex_yzx, simplex_zxy]
+        conductivity: <bulk_conductivity>
+    balance: {}
+    output:
+      fields:
+        - piezo_head_p0
+        - pressure_p0
+        - velocity_p0
+    solver: !Petsc
+      r_tol: 1.0e-10
+      a_tol: 1.0e-10
+    output_stream:
+      file: flow.msh
+      format: !gmsh
+        variant: ascii

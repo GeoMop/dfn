@@ -1,4 +1,4 @@
-from gmsh_api import gmsh
+import gmsh
 from typing import TypeVar, List
 gmsh_field = gmsh.model.mesh.field
 
