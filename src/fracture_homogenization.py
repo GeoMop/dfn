@@ -26,6 +26,7 @@ import numpy as np
 import os
 import subprocess
 import yaml
+import json
 import sys
 import matplotlib.pyplot as plt
 
@@ -41,6 +42,7 @@ class SimplexSample:
     mass: float = None
     center_of_mass: List[float] = None
     result_fluxes: List[float] = None
+    is_through: bool = False
 
 
 class Realization:
@@ -100,6 +102,12 @@ class Realization:
         fr = fracture.copy().rotate([0, 0, 1], normal_angle).rotate(axis, angle).translate(center)
 
         fr = fr.intersect(simplex)
+        b_fr = fr.get_boundary()
+        b_simplex = simplex.get_boundary()
+        bb = b_fr.copy().intersect(b_simplex)
+        if len(bb.dim_tags) == len(b_fr.dim_tags):
+            self.sample.is_through = True
+
         center, mass = fr.center_of_mass()
         if mass < 1e-3:
             return False
@@ -122,6 +130,7 @@ class Realization:
 
     def make_mesh(self, population):
         self.geo.reinit()
+        assert len(self.geo.all_entities()) == 0
         geopt = gmsh.GeometryOptions()
         geopt.ToleranceBoolean = 1e-3
         geopt.MatchMeshTolerance = 1e-3
@@ -146,6 +155,7 @@ class Realization:
                 b = b_inst_group.select_by_intersect(inst_tool).modify_regions(format)
                 b_group.append(b)
 
+
         self.geo.remove_duplicate_entities()
         mesh_objects = b_group + instances
         mesh = gmsh.MeshOptions()
@@ -159,7 +169,7 @@ class Realization:
         self.geo.write_mesh(mesh_file)
         self.mesh_file = mesh_file[:-1]
         os.rename(mesh_file, self.mesh_file)
-        
+
 
     @staticmethod
     def substitute_placeholders(file_in, file_out, params):
@@ -224,7 +234,7 @@ class Realization:
         with open(os.path.join(self.dir, "output", "water_balance.yaml")) as f:
             balance = yaml.load(f)
         data = balance['data']
-        homo_cond_tn = np.zeros((3,3))
+        homo_cond_tn = np.zeros((3,3), dtype=float)
         ori_face_map = {'xyz':0, 'yzx':1, 'zxy':2 }
         face_map = {'xface': 0, 'yface': 1, 'zface': 2}
         for item in data:
@@ -238,7 +248,10 @@ class Realization:
                 i_face = face_map[face]
                 tn_col = i_ori
                 tn_row = (i_face + i_ori) % 3
-                bc_flux = item['data'][0]
+                try:
+                    bc_flux = float(item['data'][0])
+                except Exception:
+                    print("Value Error, bc_flux: ", item['data'][0])
                 homo_cond_tn[tn_row][tn_col] += bc_flux
         return homo_cond_tn
 
@@ -325,15 +338,40 @@ def sample_pbs(n_packages):
         
 class Process:
     def __init__(self, results_file):
-        self.samples = []
+        self.failed = []
+        self.correct = []
         self.load_df(results_file)
-        self.precompute()
 
     def load_df(self, res_file):
+        total_size = os.path.getsize(res_file)
         with open(res_file, "r") as f:
-            for line in f:
+            size = 0
+            for i, line in enumerate(f):
+                size += len(line)
+                if i % 1000 == 0:
+                    print("Loading ... {}%".format(100 * size / total_size))
+                #line_dict = json.loads(line)
                 line_dict = yaml.load(line)
-                self.samples.append(SimplexSample(**line_dict))
+                self.precompute(SimplexSample(**line_dict))
+        print("Failed: {}, correct: {}.".format(len(self.failed), len(self.correct)))
+
+
+
+    def precompute(self, sample):
+        if sample.result_fluxes == 'None':
+            self.failed.append(sample)
+            return
+        tensor = np.array(sample.result_fluxes, dtype=float)
+        assert tensor.shape == (3,3)
+        sample.tn = tensor
+        sample.sym_tn = (tensor + tensor.T) / 2
+        sample.sym_err = np.linalg.norm(tensor - sample.sym_tn)
+        sample.sym_relerr = 2 * sample.sym_err / (1e-10 + np.linalg.norm(tensor) + np.linalg.norm(sample.sym_tn))
+        eval, evec = np.linalg.eigh(sample.sym_tn)
+        sample.sym_eval = eval
+        sample.sym_evec = evec
+        self.correct.append(sample)
+
 
     def analyse(self):
         """
@@ -341,43 +379,24 @@ class Process:
         :return:
         """
         self.symmetry_test()
+        print("here")
         self.eigen_val_corellation()
-
-    def precompute(self):
-        self.failed = []
-        self.correct = []
-        for i, sample in enumerate(self.samples):
-            if i % 100 == 0:
-                print("Loading ... {}%".format(100*i/len(self.samples)))
-            if sample.result_fluxes == 'None':
-                self.failed.append(sample)
-                continue
-            tensor = np.array(sample.result_fluxes, dtype=float)
-            assert tensor.shape == (3,3)
-            sample.tn = tensor
-            sample.sym_tn = (tensor + tensor.T) / 2
-            sample.sym_err = np.linalg.norm(tensor - sample.sym_tn)
-            sample.sym_relerr = sample.sym_err / np.linalg.norm(tensor)
-            eval, evec = np.linalg.eigh(sample.sym_tn)
-            sample.sym_eval = eval
-            sample.sym_evec = evec
-            self.correct.append(sample)
-        print("Failed: {}, correct: {}.".format(len(self.failed), len(self.correct)))
 
     def symmetry_test(self):
         """
         Plot histogram of norm of deviation from symmetrized tensor.
         """
         fig = plt.figure(figsize=(20, 10))
-        ax_err = fig.add_subpolot(2, 1, 1)
-        ax_tn = fig.add_subpolot(2, 1, 2)
+        ax_err = fig.add_subplot(2, 1, 1)
+        ax_tn = fig.add_subplot(2, 1, 2)
 
         err = [s.sym_relerr for s in self.correct]
         ax_err.hist(err, bins=20, range=(0, 1), density=True)
-        plt.show()
         tn_norm = [np.linalg.norm(s.tn) for s in self.correct]
         ax_tn.hist(tn_norm, bins=20, density=True)
+        print("here")
         fig.savefig("symmetry_error.pdf")
+        print("here")
 
     def eigen_val_corellation(self):
         """
@@ -385,13 +404,13 @@ class Process:
         :return:
         """
         fig = plt.figure(figsize=(30, 10))
-        ax_12 = fig.add_subpolot(3, 1, 1)
-        ax_13 = fig.add_subpolot(3, 1, 2)
-        ax_23 = fig.add_subpolot(3, 1, 3)
+        ax_12 = fig.add_subplot(3, 1, 1)
+        ax_13 = fig.add_subplot(3, 1, 2)
+        ax_23 = fig.add_subplot(3, 1, 3)
 
-        e1 = [s.sym_eval[0] for s in self.samples]
-        e2 = [s.sym_eval[1] for s in self.samples]
-        e3 = [s.sym_eval[2] for s in self.samples]
+        e1 = [s.sym_eval[0] for s in self.correct]
+        e2 = [s.sym_eval[1] for s in self.correct]
+        e3 = [s.sym_eval[2] for s in self.correct]
 
         ax_12.scatter(e1, e2)
         ax_13.scatter(e1, e3)

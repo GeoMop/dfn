@@ -23,7 +23,7 @@ problem: !Coupling_Sequential
            #value: "x"
       - region: .BOUNDARY
         bc_type: dirichlet
-        bc_pressure: !FieldFormula
+        bc_piezo_head: !FieldFormula
            value: "x"
 
       - region: [fracture_xyz, fracture_yzx, fracture_zxy]
