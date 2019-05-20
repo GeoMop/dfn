@@ -340,6 +340,7 @@ class Process:
     def __init__(self, results_file):
         self.failed = []
         self.correct = []
+        self.wrong_result = []
         self.load_df(results_file)
 
     def load_df(self, res_file):
@@ -349,11 +350,14 @@ class Process:
             for i, line in enumerate(f):
                 size += len(line)
                 if i % 1000 == 0:
-                    print("Loading ... {}%".format(100 * size / total_size))
+                    percent = 100 * size / total_size
+                    print("Loading ... {}%".format(percent))
+                    if percent > 20:
+                        break
                 #line_dict = json.loads(line)
                 line_dict = yaml.load(line)
                 self.precompute(SimplexSample(**line_dict))
-        print("Failed: {}, correct: {}.".format(len(self.failed), len(self.correct)))
+        print("Failed: {}, correct: {} wrong: {}".format(len(self.failed), len(self.correct), len(self.wrong_result)))
 
 
 
@@ -361,16 +365,21 @@ class Process:
         if sample.result_fluxes == 'None':
             self.failed.append(sample)
             return
-        tensor = np.array(sample.result_fluxes, dtype=float)
-        assert tensor.shape == (3,3)
-        sample.tn = tensor
-        sample.sym_tn = (tensor + tensor.T) / 2
-        sample.sym_err = np.linalg.norm(tensor - sample.sym_tn)
-        sample.sym_relerr = 2 * sample.sym_err / (1e-10 + np.linalg.norm(tensor) + np.linalg.norm(sample.sym_tn))
-        eval, evec = np.linalg.eigh(sample.sym_tn)
-        sample.sym_eval = eval
-        sample.sym_evec = evec
-        self.correct.append(sample)
+        try:
+            tensor = np.array(sample.result_fluxes, dtype=float)
+            assert tensor.shape == (3,3)
+            sample.tn = tensor
+            sample.sym_tn = (tensor + tensor.T) / 2
+            sample.sym_err = np.linalg.norm(tensor - sample.sym_tn)
+            sample.sym_relerr = 2 * sample.sym_err / (1e-10 + np.linalg.norm(tensor) + np.linalg.norm(sample.sym_tn))
+            eval, evec = np.linalg.eigh(sample.sym_tn)
+            sample.sym_eval = eval
+            sample.sym_evec = evec
+            self.correct.append(sample)
+        except Exception:
+            self.wrong_result.append(sample)
+
+
 
 
     def analyse(self):
@@ -379,45 +388,81 @@ class Process:
         :return:
         """
         self.symmetry_test()
-        print("here")
         self.eigen_val_corellation()
+        self.mass_cond()
 
     def symmetry_test(self):
         """
         Plot histogram of norm of deviation from symmetrized tensor.
         """
         fig = plt.figure(figsize=(20, 10))
-        ax_err = fig.add_subplot(2, 1, 1)
-        ax_tn = fig.add_subplot(2, 1, 2)
+        ax_err = fig.add_subplot(1, 2, 1)
+        ax_tn = fig.add_subplot(1, 2, 2)
 
         err = [s.sym_relerr for s in self.correct]
-        ax_err.hist(err, bins=20, range=(0, 1), density=True)
+        ax_err.hist(err, bins=20, density=True)
         tn_norm = [np.linalg.norm(s.tn) for s in self.correct]
         ax_tn.hist(tn_norm, bins=20, density=True)
-        print("here")
         fig.savefig("symmetry_error.pdf")
-        print("here")
 
     def eigen_val_corellation(self):
         """
         We assume there is a correlation between eigen values.
         :return:
         """
-        fig = plt.figure(figsize=(30, 10))
-        ax_12 = fig.add_subplot(3, 1, 1)
-        ax_13 = fig.add_subplot(3, 1, 2)
-        ax_23 = fig.add_subplot(3, 1, 3)
+        fig = plt.figure(figsize=(20, 20))
+        ax_12 = fig.add_subplot(221)
+        ax_13 = fig.add_subplot(222, sharey=ax_12)
+        ax_22 = fig.add_subplot(223, sharex=ax_12)
+        ax_23 = fig.add_subplot(224, sharex=ax_22, sharey=ax_13)
 
-        e1 = [s.sym_eval[0] for s in self.correct]
-        e2 = [s.sym_eval[1] for s in self.correct]
-        e3 = [s.sym_eval[2] for s in self.correct]
+        e1 = [-s.sym_eval[0] for s in self.correct]
+        e2 = [-s.sym_eval[1] for s in self.correct]
+        e3 = [-s.sym_eval[2] for s in self.correct]
 
-        ax_12.scatter(e1, e2)
-        ax_13.scatter(e1, e3)
-        ax_23.scatter(e2, e3)
+        lims = [-2, 10]
+        ax_12.scatter(e2, e1)
+        ax_12.set_xlim(*lims)
+        ax_12.set_ylim(*lims)
+
+        ax_13.scatter(e3, e1)
+        ax_13.set_xlim(*lims)
+        ax_13.set_ylim(*lims)
+        ax_23.scatter(e3, e2)
+        ax_23.set_xlim(*lims)
+        ax_23.set_ylim(*lims)
+
+        ax_22.set_xlim(*lims)
+        ax_22.set_ylim(*lims)
+
+        ax_22.set_xlabel("e2")
+        ax_12.set_ylabel("e1")
+        ax_23.set_xlabel("e3")
+        ax_22.set_ylabel("e2")
         fig.savefig("evals_correlation.pdf")
 
+    def mass_cond(self):
+        fig = plt.figure(figsize=(5, 5))
+        ax = fig.add_subplot(1, 1, 1)
+        cond_mass = [ (-s.sym_eval[0], s.mass) for s in self.correct if -s.sym_eval[0] > 0.1]
+        cond, mass = zip(*cond_mass)
+        fit = np.polyfit(np.log(mass), np.log(cond), deg=1)
+        print("mass_cond_fit:", fit)
+        reg_line = np.poly1d(fit)
 
+        ax.scatter(mass, cond,  s=1)
+        ax.set_ylim(0.3, 13)
+        x_lim = [0.0008, 1]
+        ax.set_xlim(*x_lim)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("intersection surface")
+        ax.set_ylabel("largest eigenvalue")
+
+        X = np.geomspace(*x_lim, 100)
+        ax.plot(X, np.exp(reg_line(np.log(X))), c='red', )
+        ax.text(1e-3, 10, "log(cond) = {:5.2f} + {:5.2f} * log(mass)".format(fit[0], fit[1]))
+        fig.savefig("mass_cond.pdf")
 
 def main():
     command = sys.argv[1]

@@ -1,9 +1,47 @@
+"""
+Module for statistical description of the fracture networks.
+It provides appropriate statistical models as well as practical sampling methods.
+"""
+
+from typing import Union, List
 import numpy as np
 import attr
 
 
 
+@attr.s(auto_attribs=True)
+class FractureShape:
+    """
+    Single fracture sample.
+    """
+    r: float
+    # Size of the fracture, laying in XY plane
+    centre: np.array
+    # location of the barycentre of the fracture
+    rotation_axis: np.array
+    # axis of rotation
+    rotation_angle: float
+    # angle of rotation around the axis (?? counterclockwise with axis pointing up)
+    region: Union[str, int]
+    # name or ID of the physical group
+    aspect: float = 1
+    # aspect ratio of the fracture, y_length : x_length, x_length == r
+
+    @property
+    def rx(self):
+        return self.r
+
+    @property
+    def ry(self):
+        return self.r * self.aspect
+
+
+
 class Quat:
+    """
+    Simple quaternion class as numerically more stable alternative to the Orientation methods.
+    TODO: finish, test, substitute
+    """
     def __init__(self, q):
         self.q = q
 
@@ -98,13 +136,18 @@ class FisherOrientation:
             else:
                 exp_k = np.exp(self.dispersion)
                 exp_ik = 1 / exp_k
-                cos_theta = np.ln(exp_k - unif * ( exp_k - exp_ik) ) / self.dispersion
+                cos_theta = np.log(exp_k - unif * ( exp_k - exp_ik) ) / self.dispersion
             sin_theta = np.sqrt(1 - cos_theta**2)
             normals = np.stack((sin_psi * cos_theta, cos_psi * cos_theta, sin_theta), axis=1)
         return normals
         # rotate to mean strike and dip
 
     def sample_normal(self, size=1):
+        """
+        Draw samples for the fracture normals.
+        :param size: number of samples
+        :return: array (n, 3)
+        """
         raw_normals = self._sample_standard_fisher(size)
         mean_norm = self._mean_normal()
         axis_angle = self.normal_to_axis_angle(mean_norm[None,:])
@@ -113,7 +156,7 @@ class FisherOrientation:
     def sample_axis_angle(self, size=1):
         """
         Sample fracture orientation angles.
-        :param n: Number of samples
+        :param size: Number of samples
         :return: shape (n, 4), every row: unit axis vector and angle
         """
         normals = self.sample_normal(size)
@@ -181,6 +224,9 @@ class FisherOrientation:
     #     assert plunge == self.plunge
 
 
+class Position:
+    def __init__(self):
+
 
 @attr.s(auto_attribs=True)
 class PowerLawSize:
@@ -194,49 +240,68 @@ class PowerLawSize:
     """
     power: float
     # power of th power law
-    size_min: float
-    # lower bound of the power law
-    size_max:float
-    # upper bound of the power law
+    diam_range: (float, float)
+    # lower and upper bound of the power law for the fracture diameter (size), values for which the intensity is given
+    intensity: float
+    # number of fractures with size in the size_range per unit volume, denoted also P30
+    sample_range: (float, float)
+    # range used for sampling., not part of the statistical description
 
     def _cdf(self, x, min, max):
         # Distribution function
         pmin = min ** (-self.power)
         pmax = max ** (-self.power)
-        return (x ** (-self.power) - pmin)/(pmax - pmin)
+        return (pmin - x ** (-self.power))/(pmin - pmax)
 
 
-    def _pdf(self, x, min, max):
+    def _ppf(self, x, min, max):
         # Quantile function
         pmin = min ** (-self.power)
         pmax = max ** (-self.power)
         scaled = pmin - x*(pmin - pmax)
         return scaled ** (-1 / self.power)
 
+    def range_intensity(self, range):
+        a, b = self.diam_range
+        c, d = range
+        k = self.power
+        return self.intensity * (c**(-k) - d**(-k)) / (a**(-k) - b**(-k))
 
-    def sample(self, size=1, min=0, max=np.inf):
+    def set_sample_range(self, sample_range=None):
         """
-        Sample the fracture size
-        :param min: Override population size_min, if min > size_min
-        :param max:
+        Rescale to the new
+        :param sample_range:
         :return:
         """
-        min = max(self.size_min, min)
-        max = max(self.size_max, max)
-        U = np.random.random(size=size)
-        return self.pdf(U, min, max)
+        if sample_range is None:
+            sample_range = self.diam_range
+        self._sample_range = sample_range
+        self._sample_intensity = self.range_intensity(self._sample_range)
 
-    def subinterval_fraction(self, min=0, max=np.inf):
+    def set_range_by_intensity(self, intensity):
+        a, b = self.diam_range
+        c, d = self.sample_range
+        k = self.power
+        self.sample_range[0] = (intensity * (a**(-k) - b**(-k)) / self.intensity + d**(-k)) ** (-1/k)
+
+    def mean_size(self, volume):
         """
-        Fraction of sizes (min, max) within the full population.
-        :param min:
-        :param max:
+        :return: Mean of number of fractures.
+        """
+        return self._sample_intensity * volume
+
+
+    def sample(self, volume, size=None):
+        """
+        Sample the fracture diameters.
         :return:
         """
-        min = max(self.size_min, min)
-        max = max(self.size_max, max)
-        p_min, p_max = self._cdf(np.array([min,max]), self.size_min, self.size_max)
-        return p_max - p_min
+        if size is None:
+            size = np.random.poisson(lam=self.mean_size(volume), size=1)
+        U = np.random.rand(size=size)
+        return self._ppf(U, self._sample_range[0], self._sample_range[1])
+
+
 
 
 
@@ -250,91 +315,121 @@ class PowerLawSize:
 #     def sample(self, box_min, box_max):
 
 
+@attr.s(auto_attribs=True)
+class FrFamily:
+    name: str
+    orientation: FisherOrientation
+    shape: PowerLawSize
 
-class FracturePopulation:
+
+class Populatfion:
     """
-    Data class to describe a population of random fractures with common parameters.
+    Data class to describe whole population of fractures, several families.
     """
-    def __init__(self, orientation, size, intenzity):
+    def __init__(self, volume):
         """
-
         :param orientation: Orientation stochastic model
         :param size: Size stochastic model.
         :param intenzity: Stochastic model.
         """
-        self.orientation = orientation
-        self.size = size
-        self.intenzity = intenzity
+        self.volume = volume
+        self.families = []
 
 
-    # size_min: float
-    # # lower limit of the fracture (Power
-    # self.name = kwargs.get("name", "")
-    # self.trend = kwargs.get("trend")
-    # self.plunge = kwargs.get("plunge")
-    # self.strike = kwargs.get("strike")
-    # self.dip = kwargs.get("dip")
-    # self.k = kwargs.get("k")
-    # self.r_0 = kwargs.get("r_0")
-    # self.kappa = kwargs.get("kappa")
-    # self.r_min = kwargs.get("r_min")
-    # self.r_max = kwargs.get("r_max")
-    # self.p_32 = kwargs.get("p_32")
-    #
-    # self.n_fractures = 10
-    # self.p_30 = None
-    # self.compute_p_30()
+    @staticmethod
+    def load(json_stream):
+        """
+        Load families from a JSON stream. Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
+        :param json_stream:
+        :return: Population instance.
+        """
 
-    def sample(self, box_min, box_max, r_min=0, r_max=np.inf):
+
+    def add_family(self, name, position, shape):
+        self.families.append( FrFamily(name, position, shape) )
+
+
+    def mean_size(self):
+        return sum(( family.shape.mean_size(self.volume) for family in self.families))
+
+
+    def set_sample_range(self, sample_range, max_sample_size=None):
+        """
+        Set sample range for fracture diameter.
+        :param sample_range:
+        :param max_sample_size: If provided, the lower bound is enlarged in order to achieve
+        this limit on mean of the number of fractures.
+        :return:
+        """
+        for f in self.families:
+            f.shape.set_sample_range(sample_range)
+        if max_sample_size is not None:
+            total_size = self.mean_size()
+            if total_size > max_sample_size:
+                for f in self.families:
+                    f.shape.set_range_by_intensity( f.mean_size(volume) / total_size * max_sample_size / self.volume)
+
+
+
+    def sample(self):
         """
         Provide a single fracture sample from the population.
         :return:
         """
-        n_fractures = self.intenzity.sample(box_min, box_max, r_min, r_max)
-        fr_axis_angle = self.orientation.sample_axis_angle(n_fractures)
-        fr_size = self.size.sample(n_fractures, r_min, r_max)
-        # fr_centre =
-
-
-class FractureGenerator:
-    def __init__(self, frac_type):
-        self.frac_type = frac_type
-
-    def generate_fractures(self, min_distance, min_radius, max_radius):
         fractures = []
-
-        for i in range(self.frac_type.n_fractures):
-            x = uniform(2 * min_distance, 1 - 2 * min_distance)
-            y = uniform(2 * min_distance, 1 - 2 * min_distance)
-            z = uniform(2 * min_distance, 1 - 2 * min_distance)
-
-            tpl = TPL(self.frac_type.kappa, self.frac_type.r_min, self.frac_type.r_max, self.frac_type.r_0)
-            r = tpl.rnd_number()
-
-            orient = Orientation(self.frac_type.trend, self.frac_type.plunge, self.frac_type.k)
-            axis, angle = orient.compute_axis_angle()
-
-            fd = FractureData(x, y, z, r, axis[0], axis[1], axis[2], angle, i * 100)
-
-            fractures.append(fd)
-
+        for f in self.families:
+            name = f.name
+            diams = f.shape.sample(self.volume)
+            fr_axis_angle = f.orientation.sample_axis_angle(len(diams))
+            centers = np.random.rand(len(diams), 3)
+            for r, aa, c in zip(diams, fr_axis_angle, centers):
+                axis, angle = aa[:3], aa[3]
+                fractures.append(FractureShape(r, c, axis, angle, name, 1))
         return fractures
-
-    def write_fractures(self, fracture_data, file_name):
-        with open(file_name, "w") as writer:
-            for d in fracture_data:
-                writer.write("%f %f %f %f %f %f %f %f %d\n" % (d.centre[0], d.centre[1], d.centre[2], d.r, d.rotation_axis[0],
-                                                        d.rotation_axis[1], d.rotation_axis[2], d.rotation_angle, d.tag))
-
-    def read_fractures(self, file_name):
-        data = []
-        with open(file_name, "r") as reader:
-            for l in reader.readlines():
-                x, y, z, r, axis_0, axis_1, axis_2, angle = [float(i) for i in l.split(' ')[:-1]]
-                tag = int(l.split(' ')[-1])
-                d = FractureData(x, y, z, r, axis_0, axis_1, axis_2, angle, tag)
-                data.append(d)
-
-        return data
-
-
+#
+#
+#
+#
+#
+# class FractureGenerator:
+#     def __init__(self, frac_type):
+#         self.frac_type = frac_type
+#
+#     def generate_fractures(self, min_distance, min_radius, max_radius):
+#         fractures = []
+#
+#         for i in range(self.frac_type.n_fractures):
+#             x = uniform(2 * min_distance, 1 - 2 * min_distance)
+#             y = uniform(2 * min_distance, 1 - 2 * min_distance)
+#             z = uniform(2 * min_distance, 1 - 2 * min_distance)
+#
+#             tpl = TPL(self.frac_type.kappa, self.frac_type.r_min, self.frac_type.r_max, self.frac_type.r_0)
+#             r = tpl.rnd_number()
+#
+#             orient = Orientation(self.frac_type.trend, self.frac_type.plunge, self.frac_type.k)
+#             axis, angle = orient.compute_axis_angle()
+#
+#             fd = FractureData(x, y, z, r, axis[0], axis[1], axis[2], angle, i * 100)
+#
+#             fractures.append(fd)
+#
+#         return fractures
+#
+#     def write_fractures(self, fracture_data, file_name):
+#         with open(file_name, "w") as writer:
+#             for d in fracture_data:
+#                 writer.write("%f %f %f %f %f %f %f %f %d\n" % (d.centre[0], d.centre[1], d.centre[2], d.r, d.rotation_axis[0],
+#                                                         d.rotation_axis[1], d.rotation_axis[2], d.rotation_angle, d.tag))
+#
+#     def read_fractures(self, file_name):
+#         data = []
+#         with open(file_name, "r") as reader:
+#             for l in reader.readlines():
+#                 x, y, z, r, axis_0, axis_1, axis_2, angle = [float(i) for i in l.split(' ')[:-1]]
+#                 tag = int(l.split(' ')[-1])
+#                 d = FractureData(x, y, z, r, axis_0, axis_1, axis_2, angle, tag)
+#                 data.append(d)
+#
+#         return data
+#
+#
