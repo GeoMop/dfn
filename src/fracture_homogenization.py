@@ -48,7 +48,6 @@ class SimplexSample:
 class Realization:
     fr_side = 1
     el_size = 0.1
-    summary = "samples.txt"
 
     def __init__(self, geo, base_dir, dir,  population, summary_file):
         self.geo = geo
@@ -316,7 +315,8 @@ pwd
 trap 'clean_scratch' TERM EXIT
 
 DATADIR="$HOME/workspace/dfn/homogenization"
-WORKDIR="$HOME/workspace/dfn/src"
+WORKDIR="$HOME/workspace/dfn/homogenization/{case}"
+SCRIPTDIR="$HOME/workspace/dfn/src"
 
 # copy own data into scratch directory
 cp $DATADIR/flow.sh $DATADIR/flow_in.yaml $SCRATCHDIR || exit 1
@@ -326,24 +326,24 @@ cd $DATADIR || exit 2
 module load python-3.6.2-gcc python36-modules-gcc flow123d/3.0.0
 
 # respective execution of the computing
-python3 $WORKDIR/fracture_homogenization.py sample {id_min} {id_max} $SCRATCHDIR
+python3 $SCRIPTDIR/{py_script} sample {id_min} {id_max} $SCRATCHDIR
 
 # copy resources from scratch directory back on disk field, if not successful, scratch is not deleted
-cp $SCRATCHDIR/summary_*  $DATADIR || export CLEAN_SCRATCH=false
+cp $SCRATCHDIR/summary_*  $WORKDIR || export CLEAN_SCRATCH=false
 """
 
 
-def pbs_file(id_range):
-      content = pbs_script_template.format(id_min=id_range[0], id_max=id_range[1])
+def pbs_file(id_range, case_name):
+      content = pbs_script_template.format(id_min=id_range[0], id_max=id_range[1],
+                                           py_script=os.path.basename(__file__), case=case_name)
       script_name = "pbs_homo_{}_{}.sh".format(*id_range)
       return script_name, content
 
-def sample_pbs(n_packages):
-    per_package = 1000
-    base_dir = "../homogenization"
+def sample_pbs(n_packages, per_package, case_name):
+    base_dir = "../homogenization/{}_{}".format(case_name, str(n_packages*per_package))
     for i in range(n_packages):
         id_range = [i*per_package, (i+1)*per_package]
-        fname, content = pbs_file(id_range)
+        fname, content = pbs_file(id_range, case_name)
         fname = os.path.join(base_dir, fname)
         with open(fname, "w") as f:
             f.write(content)        
@@ -483,7 +483,7 @@ def main():
     command = sys.argv[1]
     if command == 'sample':
         id_range = [int(token) for token in sys.argv[2:4]]
-        if len(sys.argv) > 4:
+        if len(sys.argv) > 3:
             base_dir = sys.argv[4]
         else:
             base_dir = "../homogenization"
@@ -494,7 +494,9 @@ def main():
 
     elif command == 'sample_pbs':
         n_packages = int(sys.argv[2])
-        sample_pbs(n_packages)
+        per_package = int(sys.argv[3])
+        case_name = sys.argv[4]
+        sample_pbs(n_packages, per_package, case_name)
 
     elif command == 'process':
         if len(sys.argv) > 2:
