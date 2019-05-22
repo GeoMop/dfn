@@ -134,6 +134,7 @@ class Realization:
 
 
     def make_mesh(self, population):
+        print("  ... geometry")
         self.geo.reinit()
         assert len(self.geo.all_entities()) == 0
         geopt = gmsh.GeometryOptions()
@@ -172,6 +173,7 @@ class Realization:
         mesh.CharacteristicLengthMin = self.el_size
         mesh.CharacteristicLengthMax = self.el_size
 
+        print("  ... meshing")
         self.geo.make_mesh(mesh_objects, eliminate=True)
         self.geo.write_brep(self.sample_file("simplex.brep"))
         self.geo.write_mesh(mesh_file)
@@ -203,6 +205,7 @@ class Realization:
 
 
     def setup_flow123d(self):
+        print("  ... flow setup")
         #self.sample.fr_cross_section = np.random.uniform(0.01, 0.1)
         self.sample.fr_cross_section = 0.1 #np.random.uniform(0.01, 0.1)
         self.sample.conductivity_base = 1
@@ -220,6 +223,7 @@ class Realization:
             params)
 
     def run(self):
+        print("  ... flow run")
         args = [
             "../../flow.sh",
             "--yaml_balance",
@@ -231,12 +235,13 @@ class Realization:
                                    stdout=stdout, stderr=stderr)
         if completed.returncode == 0:
             self.sample.result_fluxes = self.extract_results().tolist()
+        else:
+            os.rename(self.dir, self.dir + ".failed")
 
         # append result
         with open(self.summary_file, "a") as f:
             line = str(attr.asdict(self.sample)) + "\n"
             f.write(line)
-
 
 
     def extract_results(self):
@@ -277,12 +282,13 @@ class Realization:
 
 
 def create_samples(id_range, base_dir):
-    geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
+    geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=False)
 
     # Uniform fractures on sphere
     #fracture_population = fg.FisherOrientation(0, 0, 0)
     fracture_population = fg.FisherOrientation(0, 0, np.inf)
     summary_file = "summary_{}_{}.txt".format(*id_range)
+    full_summary = os.path.join(base_dir, summary_file)
     for id in range(id_range[0], id_range[1]):
         dir = "{:06d}".format(id)
         try:
@@ -292,7 +298,7 @@ def create_samples(id_range, base_dir):
         except Exception:
             pass
     #geo.show()
-    return x.summary_file
+    return full_summary
 
 pbs_script_template =\
 """
@@ -330,6 +336,8 @@ python3 $SCRIPTDIR/{py_script} sample {id_min} {id_max} $SCRATCHDIR
 
 # copy resources from scratch directory back on disk field, if not successful, scratch is not deleted
 cp $SCRATCHDIR/summary_*  $WORKDIR || export CLEAN_SCRATCH=false
+mkdir $WORKDIR/failed
+cp $SCRATCHDIR/samples/*.failed $WORKDIR/failed
 """
 
 

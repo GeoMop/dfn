@@ -224,8 +224,8 @@ class FisherOrientation:
     #     assert plunge == self.plunge
 
 
-class Position:
-    def __init__(self):
+# class Position:
+#     def __init__(self):
 
 
 @attr.s(auto_attribs=True)

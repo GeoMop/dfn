@@ -153,7 +153,6 @@ class Options:
 class MeshOptions(Options):
     def __init__(self):
         super().__init__('Mesh.')
-        print(self.__setattr__)
         self.Algorithm = Algorithm2d.Automatic
         # 2D mesh algorithm
         self.Algorithm3D = Algorithm3d.Delaunay
@@ -175,7 +174,6 @@ class MeshOptions(Options):
         # Factor applied to all mesh element sizes
         self.MinimumCurvePoints = 6
         # Minimum number of points used to mesh a (non-straight) curve
-        print(self.names_map)
         self.finish_init()
 
 
@@ -654,7 +652,6 @@ class ObjectSet:
         regions = [[], [], [], []]
         for dimtag, reg in self.dimtagreg():
             dim, tag = dimtag
-            print(dim, tag, reg)
             reg.complete(dim)
             dimtags[dim].append(dimtag)
             regions[dim].append(reg)
@@ -677,7 +674,6 @@ class ObjectSet:
             b_reg_name = format.format(reg.name)
             b_reg = Region.get(b_reg_name, dim=reg.dim - 1)
             #self.factory.get_region_name()
-            print(reg, b_reg)
 
             boundary = rset.get_boundary(combined=True).set_region(b_reg)
             b_sets.append(boundary)
