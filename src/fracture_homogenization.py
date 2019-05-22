@@ -204,7 +204,7 @@ class Realization:
 
     def setup_flow123d(self):
         #self.sample.fr_cross_section = np.random.uniform(0.01, 0.1)
-        self.sample.fr_cross_section = 0.01 #np.random.uniform(0.01, 0.1)
+        self.sample.fr_cross_section = 0.1 #np.random.uniform(0.01, 0.1)
         self.sample.conductivity_base = 1
         self.sample.fr_conductivity = 100
 
@@ -341,10 +341,13 @@ def pbs_file(id_range, case_name):
 
 def sample_pbs(n_packages, per_package, case_name):
     base_dir = "../homogenization/{}_{}".format(case_name, str(n_packages*per_package))
+    os.makedirs(base_dir)
+    
     for i in range(n_packages):
         id_range = [i*per_package, (i+1)*per_package]
         fname, content = pbs_file(id_range, case_name)
         fname = os.path.join(base_dir, fname)
+        
         with open(fname, "w") as f:
             f.write(content)        
         print("Sumbitting: ", fname)
@@ -505,7 +508,8 @@ def main():
             results_file = "../homogenization/summary_0_200.txt"
         proc = Process(results_file)
         proc.analyse()
-
-
+    else:
+      print("Missing command!")
+  
 
 main()
