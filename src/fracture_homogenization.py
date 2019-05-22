@@ -21,7 +21,7 @@
 from typing import List
 import attr
 from gmsh_api import gmsh
-import fracture_generator as fg
+import fracture as fg
 import numpy as np
 import os
 import subprocess
@@ -91,11 +91,17 @@ class Realization:
         fr_a = population.normal_to_axis_angle(fr_normal)
         axis, angle = fr_a[0, :3], fr_a[0, 3]
 
-        # random position
+        # random position - big box
+        # pt = np.random.rand(3)
+        # box_min = -self.fr_side * np.sqrt(2) * np.ones(3)
+        # box_max = (1 + self.fr_side * np.sqrt(2)) * np.ones(3)
+        # center = (box_max - box_min) * pt + box_min
+
+        # random position - center inside the simplex
         pt = np.random.rand(3)
-        box_min = -self.fr_side * np.sqrt(2) * np.ones(3)
-        box_max = (1 + self.fr_side * np.sqrt(2)) * np.ones(3)
-        center = (box_max - box_min) * pt + box_min
+        pt[1] = pt[1] * (1 - pt[0])
+        pt[2] = pt[2] * (1 - pt[0] - pt[1])
+        center = pt
 
         # axial rotation
         normal_angle = 2 * np.pi * np.random.uniform()
@@ -146,15 +152,19 @@ class Realization:
         self.geo.remove_duplicate_entities()
 
         # Select boundaries, must be done after all, since copy doesn't preserve boundary structure
-        b_group = []
-        for face_tool in self.face_tools:
-            tool_instances, format = face_tool
-            for inst, inst_tool in zip(instances, tool_instances):
-                b_inst = inst.get_boundary_per_region()
-                b_inst_group = self.geo.group(*b_inst)
-                b = b_inst_group.select_by_intersect(inst_tool).modify_regions(format)
-                b_group.append(b)
-
+        try:
+            b_group = []
+            for face_tool in self.face_tools:
+                tool_instances, format = face_tool
+                for inst, inst_tool in zip(instances, tool_instances):
+                    b_inst = inst.get_boundary_per_region()
+                    b_inst_group = self.geo.group(*b_inst)
+                    b = b_inst_group.select_by_intersect(inst_tool).modify_regions(format)
+                    b_group.append(b)
+        except gmsh.BoolOperationError:
+            mesh_file = self.sample_file("simplex_mesh_error.msh2")
+        else:
+            mesh_file = self.sample_file("simplex_mesh.msh2")
 
         self.geo.remove_duplicate_entities()
         mesh_objects = b_group + instances
@@ -164,7 +174,6 @@ class Realization:
         mesh.CharacteristicLengthMax = self.el_size
 
         self.geo.make_mesh(mesh_objects, eliminate=True)
-        mesh_file = self.sample_file("simplex_mesh.msh2")
         self.geo.write_brep(self.sample_file("simplex.brep"))
         self.geo.write_mesh(mesh_file)
         self.mesh_file = mesh_file[:-1]
@@ -195,7 +204,8 @@ class Realization:
 
 
     def setup_flow123d(self):
-        self.sample.fr_cross_section = np.random.uniform(0.01, 0.1)
+        #self.sample.fr_cross_section = np.random.uniform(0.01, 0.1)
+        self.sample.fr_cross_section = 0.01 #np.random.uniform(0.01, 0.1)
         self.sample.conductivity_base = 1
         self.sample.fr_conductivity = 100
 
@@ -244,15 +254,15 @@ class Realization:
             tokens = region.split('_')
             if tokens[0] in ['.fracture', '.simplex']:
                 orientation, face = tokens[1:]
+                # faces are marked by the perpendicular axis in the position before rotation
+                # so the fluxes through the faces in single rotation forms directly a column of the tensor
                 i_ori = ori_face_map[orientation]
                 i_face = face_map[face]
-                tn_col = i_ori
-                tn_row = (i_face + i_ori) % 3
                 try:
                     bc_flux = float(item['data'][0])
                 except Exception:
                     print("Value Error, bc_flux: ", item['data'][0])
-                homo_cond_tn[tn_row][tn_col] += bc_flux
+                homo_cond_tn[i_face][i_ori] += bc_flux
         return homo_cond_tn
 
 
@@ -270,15 +280,20 @@ class Realization:
 def create_samples(id_range, base_dir):
     geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
 
-    fracture_population = fg.FisherOrientation(0, 0, 0)
+    # Uniform fractures on sphere
+    #fracture_population = fg.FisherOrientation(0, 0, 0)
+    fracture_population = fg.FisherOrientation(0, 0, np.inf)
     summary_file = "summary_{}_{}.txt".format(*id_range)
     for id in range(id_range[0], id_range[1]):
         dir = "{:06d}".format(id)
-        x = Realization(geo, base_dir, dir, fracture_population, summary_file)
-        #print(attr.asdict(x.sample))
-        x.run()
+        try:
+            x = Realization(geo, base_dir, dir, fracture_population, summary_file)
+            #print(attr.asdict(x.sample))
+            x.run()
+        except Exception:
+            pass
     #geo.show()
-
+    return x.summary_file
 
 pbs_script_template =\
 """
@@ -444,15 +459,15 @@ class Process:
     def mass_cond(self):
         fig = plt.figure(figsize=(5, 5))
         ax = fig.add_subplot(1, 1, 1)
-        cond_mass = [ (-s.sym_eval[0], s.mass) for s in self.correct if -s.sym_eval[0] > 0.1]
+        cond_mass = [ (-s.sym_eval[0], s.mass*s.fr_cross_section) for s in self.correct if -s.sym_eval[0] > 0.1]
         cond, mass = zip(*cond_mass)
         fit = np.polyfit(np.log(mass), np.log(cond), deg=1)
         print("mass_cond_fit:", fit)
         reg_line = np.poly1d(fit)
 
         ax.scatter(mass, cond,  s=1)
-        ax.set_ylim(0.3, 13)
-        x_lim = [0.0008, 1]
+        ax.set_ylim(0.1, 20)
+        x_lim = [0.0001, 1]
         ax.set_xlim(*x_lim)
         ax.set_xscale("log")
         ax.set_yscale("log")
@@ -472,8 +487,11 @@ def main():
             base_dir = sys.argv[4]
         else:
             base_dir = "../homogenization"
-        create_samples(id_range, base_dir=base_dir)
-    
+        results_file = create_samples(id_range, base_dir=base_dir)
+        proc = Process(results_file)
+        proc.analyse()
+
+
     elif command == 'sample_pbs':
         n_packages = int(sys.argv[2])
         sample_pbs(n_packages)
@@ -482,7 +500,7 @@ def main():
         if len(sys.argv) > 2:
             results_file = sys.argv[2]
         else:
-            results_file = "../homogenization/summary_merged.txt"
+            results_file = "../homogenization/summary_0_200.txt"
         proc = Process(results_file)
         proc.analyse()
 
