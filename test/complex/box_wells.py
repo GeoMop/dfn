@@ -161,7 +161,7 @@ def test_box_wells():
     b_box = gmsh.model.getBoundary([box], oriented=False)
     b_wells = gmsh.model.getBoundary(wells, oriented=False)
 
-    dimtags, orig_map = gmsh.model.occ.fragment([box] + b_box, wells + b_wells)
+    dimtags, orig_map = gmsh.model.occ.fragment(b_box, wells + b_wells)
     print("dimtags:\n", dimtags)
     print("map:\n", orig_map)
 
@@ -195,6 +195,32 @@ map:
  [(2, 31), (2, 13), (2, 37)],
  [(2, 17)],
  [(2, 18)]]
+==============
+[
+[(2, 1)],
+[(2, 2)],
+[(2, 3)],
+[(2, 4)], 
+[(2, 39), (2, 9), (2, 25)], 
+[(2, 40), (2, 15), (2, 31)], 
+
+[(3, 2), (3, 3), (3, 4)], 
+[(3, 5), (3, 6), (3, 7)],
+ 
+[(2, 7), (2, 13), (2, 18)], 
+[(2, 12), (2, 17), (2, 22)], 
+[(2, 8), (2, 14), (2, 19)], 
+[(2, 10), (2, 16), (2, 21)], 
+[(2, 11)], 
+[(2, 12)], 
+[(2, 23), (2, 29), (2, 34)], 
+[(2, 28), (2, 33), (2, 38)], 
+[(2, 24), (2, 30), (2, 35)], 
+[(2, 26), (2, 32), (2, 37)], 
+[(2, 17)], 
+[(2, 18)]]
+
+
 """
 
 if __name__ == "__main__":

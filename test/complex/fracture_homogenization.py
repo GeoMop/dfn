@@ -20,13 +20,12 @@
 
 from typing import List
 import attr
-from gmsh_api import gmsh
+#from gmsh_api import gmsh
 import fracture as fg
 import numpy as np
 import os
 import subprocess
 import yaml
-import json
 import sys
 import matplotlib.pyplot as plt
 
@@ -348,7 +347,8 @@ def pbs_file(id_range, case_name):
       return script_name, content
 
 def sample_pbs(n_packages, per_package, case_name):
-    base_dir = "../homogenization/{}_{}".format(case_name, str(n_packages*per_package))
+    case_dir = "{}_{}".format(case_name, str(n_packages*per_package))
+    base_dir = os.path.join("..", "homogenization", case_dir)
     os.makedirs(base_dir)
     
     for i in range(n_packages):
@@ -364,10 +364,12 @@ def sample_pbs(n_packages, per_package, case_name):
         
 class Process:
     def __init__(self, results_file):
+        self.dir = os.path.dirname(results_file)
         self.failed = []
         self.correct = []
         self.wrong_result = []
         self.load_df(results_file)
+
 
     def load_df(self, res_file):
         total_size = os.path.getsize(res_file)
@@ -375,16 +377,16 @@ class Process:
             size = 0
             for i, line in enumerate(f):
                 size += len(line)
-                if i % 1000 == 0:
+                if i % 100 == 0:
                     percent = 100 * size / total_size
                     print("Loading ... {}%".format(percent))
-                    if percent > 20:
-                        break
+                    # if percent > 20:
+                    #     break
                 #line_dict = json.loads(line)
                 line_dict = yaml.load(line)
                 self.precompute(SimplexSample(**line_dict))
-        print("Failed: {}, correct: {} wrong: {}".format(len(self.failed), len(self.correct), len(self.wrong_result)))
 
+        print("Failed: {}, correct: {} wrong: {}".format(len(self.failed), len(self.correct), len(self.wrong_result)))
 
 
     def precompute(self, sample):
@@ -416,6 +418,7 @@ class Process:
         self.symmetry_test()
         self.eigen_val_corellation()
         self.mass_cond()
+        self.anisotropy_test()
 
     def symmetry_test(self):
         """
@@ -429,7 +432,7 @@ class Process:
         ax_err.hist(err, bins=20, density=True)
         tn_norm = [np.linalg.norm(s.tn) for s in self.correct]
         ax_tn.hist(tn_norm, bins=20, density=True)
-        fig.savefig("symmetry_error.pdf")
+        fig.savefig(os.path.join(self.dir, "symmetry_error.pdf"))
 
     def eigen_val_corellation(self):
         """
@@ -462,10 +465,10 @@ class Process:
         ax_22.set_ylim(*lims)
 
         ax_22.set_xlabel("e2")
-        ax_12.set_ylabel("e1")
-        ax_23.set_xlabel("e3")
+        ax_12.set_ylabel("e1 (smallest)")
+        ax_23.set_xlabel("e3 (highest)")
         ax_22.set_ylabel("e2")
-        fig.savefig("evals_correlation.pdf")
+        fig.savefig(os.path.join(self.dir, "evals_correlation.pdf"))
 
     def mass_cond(self):
         fig = plt.figure(figsize=(5, 5))
@@ -488,7 +491,46 @@ class Process:
         X = np.geomspace(*x_lim, 100)
         ax.plot(X, np.exp(reg_line(np.log(X))), c='red', )
         ax.text(1e-3, 10, "log(cond) = {:5.2f} + {:5.2f} * log(mass)".format(fit[0], fit[1]))
-        fig.savefig("mass_cond.pdf")
+        fig.savefig(os.path.join(self.dir, "mass_cond.pdf"))
+
+    # def anisotropy_test(self):
+    #     tn = np.empty((len(self.correct), 6))
+    #     for i, s in enumerate(self.correct):
+    #         n = np.array(s.fracture_normal)
+    #         m = np.array([-1, 0,  0])
+    #         if n @ m < 0:
+    #             n = -n
+    #         n = n / np.linalg.norm(n)
+    #         K = m[None, :] * n[:, None] - n[None, :] * m[:, None]
+    #         cos_angle = n @ m
+    #         R = np.eye(3) - np.sqrt(1 - cos_angle ** 2) * K + (1 - cos_angle) * (K @ K)
+    #
+    #         assert np.allclose(R @ n,  m)
+    #         x_dir_tn = R @ s.sym_tn @ R.T
+    #         row = x_dir_tn[1,1], x_dir_tn[2,2], x_dir_tn[0,0], x_dir_tn[0,1], x_dir_tn[0,2], x_dir_tn[1,2]
+    #         tn[i] = row
+    #     f, axes = plt.subplots(2, 3, sharey=True)
+    #     axes[0][0].hist(tn[0, :], bins=20, density=True)
+    #     axes[0][1].hist(tn[1, :], bins=20, density=True)
+    #     axes[0][2].hist(tn[2, :], bins=20, density=True)
+    #     axes[1][0].hist(tn[3, :], bins=20, density=True)
+    #     axes[1][1].hist(tn[4, :], bins=20, density=True)
+    #     axes[1][2].hist(tn[5, :], bins=20, density=True)
+    #
+    #     f.savefig(os.path.join(self.dir, "anisotropy.pdf"))
+
+
+    def anisotropy_test(self):
+        cos_angle = np.empty((len(self.correct)))
+        for i, s in enumerate(self.correct):
+            smallest_vec = s.sym_evec[0]
+            n = np.array(s.fracture_normal)
+            cos_angle[i] = smallest_vec @ n
+
+        f, axes = plt.subplots(1, 1, sharey=True)
+        axes.hist(cos_angle, bins=40, density=True)
+        f.savefig(os.path.join(self.dir, "anisotropy.pdf"))
+
 
 def main():
     command = sys.argv[1]
@@ -499,8 +541,8 @@ def main():
         else:
             base_dir = "../homogenization"
         results_file = create_samples(id_range, base_dir=base_dir)
-        proc = Process(results_file)
-        proc.analyse()
+        #proc = Process(results_file)
+        #proc.analyse()
 
 
     elif command == 'sample_pbs':
@@ -513,7 +555,7 @@ def main():
         if len(sys.argv) > 2:
             results_file = sys.argv[2]
         else:
-            results_file = "../homogenization/summary_0_200.txt"
+            results_file = "../homogenization/charon/cross_0.01_1000/summary_merged.txt"
         proc = Process(results_file)
         proc.analyse()
     else:

@@ -26,28 +26,6 @@ possible ways:
 """
 
 
-@attr.s(auto_attribs=True)
-class FractureData:
-    r: float
-    # Size of the fracture, laying in XY plane
-    centre: np.array
-    # location of the barycentre of the fracture
-    rotation_axis: np.array
-    # axis of rotation
-    rotation_angle: float
-    # angle of rotation around the axis (?? counterclockwise with axis pointing up)
-    region: Union[str, int]
-    # name or ID of the physical group
-    aspect: float = 1
-    # aspect ratio of the fracture, y_length : x_length, x_length == r
-
-    @property
-    def rx(self):
-        return self.r
-
-    @property
-    def ry(self):
-        return self.r * self.aspect
 
 
 
