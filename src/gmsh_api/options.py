@@ -76,6 +76,11 @@ class Algorithm3d(enum.IntEnum):
     RTree = 9
     HXT = 10
 
+class QualityType(enum.IntEnum):
+    SignedInversConditionNumber = 0     # SICN~signed inverse condition number (TODO: explain)
+    SignedInverseGradientError = 1      # SIGE~signed inverse gradient error (TODO: explain)
+    Gamma = 2                           # (default) gamma ~ vol / sum_face / max_edge; ( "element height" / diameter)
+    Distorsion = 3                      # Disto~minJ / maxJ (TODO: explain)
 
 class OptionsBase:
     """
@@ -154,6 +159,13 @@ class Mesh(OptionsBase):
         # 3D mesh algorithm
         self.ToleranceInitialDelaunay = 1e-12
         # Tolerance for initial 3D Delaunay mesher
+        self.ToleranceEdgeLength = 0
+        # Skip a model edge in mesh generation if its length is less than user’s defined tolerance
+        self.AngleToleranceFacetOverlap = 0.1
+        #
+        self.AnisoMax = 1e-10
+        # Maximum allowed element anisotropy.
+
         self.CharacteristicLengthFromPoints = True
         # Compute mesh element sizes from values given at geometry points
         self.CharacteristicLengthFromCurvature = True
@@ -167,8 +179,19 @@ class Mesh(OptionsBase):
         # Maximum mesh element size
         self.CharacteristicLengthFactor = float
         # Factor applied to all mesh element sizes
+
+        self.QualityType = QualityType.Gamma
+        # Type of quality measure (TODO: ?? is it used in the mesh optimizer)
+
+        self.MinimumCirclePoints = 6
+        # Minimum number of points used to mesh a circle
         self.MinimumCurvePoints = 6
         # Minimum number of points used to mesh a (non-straight) curve
+
+        self.RandomFactor = 1e-9
+        # Random factor used in the 2D meshing algorithm (should be increased if RandomFactor * size(triangle)/size(model) approaches machine accuracy)
+        self.RandomFactor3D = 1e-12
+        # Random factor used in the 3D meshing algorithm
         self.finish_init()
 
 
@@ -180,8 +203,19 @@ class Geometry(OptionsBase):
         # Geometrical tolerance
         self.ToleranceBoolean = 0.0
         # Geometrical tolerance for boolean operations
-        self.MatchMeshTolerance = 1e-06
-        # Tolerance for matching mesh and geometry
+
+        # Following options seems to be used for matching GMSH mesh and geometry files.
+        # Seems to be specific to GUI.
+        # self.MatchGeomAndMesh = False
+        # # Matches geometries and meshes.
+        # self.MatchMeshScaleFactor = 1
+        # # Rescaling factor for the mesh to correspond to size of the geometry
+        # self.MatchMeshTolerance = 1e-06
+        # # Tolerance for matching mesh and geometry
+
+        self.AutoCoherence = 1
+        # 1 - automaticaly remove duplicate entities, 2 - automaticaly remove also degenerate entities
+
 
         self.OCCFixDegenerated = False
         # Fix degenerated edges/faces in STEP, IGES and BRep models
@@ -191,4 +225,7 @@ class Geometry(OptionsBase):
         # Fix small faces in STEP, IGES and BRep models
         self.OCCBooleanPreserveNumbering = True
         # Try to preserve numbering of entities through OCC boolean operations
+        self.OCCSewFaces = False
+        # Sew faces in STEP, IGES and BRep models.
+
         self.finish_init()
