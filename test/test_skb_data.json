@@ -1,0 +1,10 @@
+ [{"name": "NS", "trend": 292, "plunge": 1,  "strike": 202, "dip": 89, "k": 17.8, "r_0": 0.038, "kappa": 2.5,
+             "r_min": 0.038, "r_max": 564, "p_32": 0.073},
+            {"name": "NE", "trend": 326, "plunge": 2,  "strike": 236, "dip": 88, "k": 14.3, "r_0": 0.038, "kappa": 2.7,
+             "r_min": 0.038, "r_max": 564, "p_32": 0.319},
+            {"name": "NW", "trend": 60,  "plunge": 6,  "strike": 330, "dip": 84, "k": 12.9, "r_0": 0.038, "kappa": 3.1,
+             "r_min": 0.038, "r_max": 564, "p_32": 0.107},
+            {"name": "EW", "trend": 15,  "plunge": 2,  "strike": 285, "dip": 88, "k": 14.0, "r_0":0.038, "kappa": 3.1,
+             "r_min": 0.038, "r_max": 564, "p_32": 0.088},
+            {"name": "HZ", "trend": 5,  "plunge": 86, "strike": 275, "dip": 4,  "k": 15.2, "r_0": 0.038, "kappa": 2.38,
+             "r_min": 0.038, "r_max": 564, "p_32": 0.543}]

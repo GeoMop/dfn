@@ -1,10 +1,11 @@
 import attr
 import enum
 from typing import TypeVar, Tuple, Optional, List
-from collections import defaultdict
 import gmsh
 import numpy as np
 import itertools
+from collections import defaultdict
+
 
 """
 Structure:
@@ -103,11 +104,8 @@ class Options:
         # Dictionary of valid options: option_name -> type
         object.__setattr__(self, '_sa', self.init_setattr)
 
-
-
     def finish_init(self):
         object.__setattr__(self, '_sa', self.instance_setattr)
-
 
     def _add(self, gmsh_name, default):
         """
@@ -127,14 +125,11 @@ class Options:
     def __setattr__(self, key, value):
         self._sa(key, value)
 
-
     def init_setattr(self, key, value):
         """
         Syntactic sugar for _add.
         """
         self._add(key, value)
-
-
 
     def instance_setattr(self, key, value):
         assert key in self.names_map
@@ -219,7 +214,6 @@ class Region:
         """
         return Region(dim, cls.get_region_id(), name)
 
-
     def complete(self, dim):
         """
         Check dimension match and complete the region.
@@ -233,12 +227,9 @@ class Region:
     def set_unique_name(self, idx):
         self.name = "{}_{}".format(self.name, idx)
 
+
 # Initialize class attribute
 Region.default_region = [Region.get("default_{}d".format(dim), dim) for dim in range(4)]
-
-
-
-
 DimTag = Tuple[int, int]
 
 
@@ -271,19 +262,15 @@ class Geometry:
         self._region_names = {}
         self._need_synchronize = False
 
-
         gmsh.option.setNumber("General.Terminal", kwargs.get('verbose', False))
-
 
     def reinit(self):
         gmsh.clear()
-
 
     def get_region_name(self, name):
         region = self._region_names.get(name, Region.get(name))
         self._region_names[name] = region
         return region
-
 
     def object(self, dim, tag):
         return ObjectSet(self, [(dim, tag)], [Region.default_region[dim]])
@@ -296,30 +283,28 @@ class Geometry:
         TODO: use own methods for construction of geometries (combine with BSplines lib.)
         :return:
         """
-        points = [(0,0,0), (1,0,0), (0,1,0), (0,0,1)]
-        lines = [ (0, 1), (1, 2), (2, 0), (0,3), (1,3), (2,3)]
-        faces = [ (0, 1, 2), (0, 3, 4), (2, 3, 5), (1, 4, 5)]
+        points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+        lines = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)]
+        faces = [(0, 1, 2), (0, 3, 4), (2, 3, 5), (1, 4, 5)]
         if dim == 0:
             res = self.model.addPoint(*points[0])
         elif dim == 1:
-            point_ids = [ self.model.addPoint(*p) for p in points[:2] ]
+            point_ids = [self.model.addPoint(*p) for p in points[:2]]
             res = self.model.addLine(*point_ids)
         elif dim == 2:
             point_ids = [self.model.addPoint(*p) for p in points[:3]]
-            line_ids = [ self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:3]  ]
+            line_ids = [self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:3]]
             loop = self.model.addCurveLoop(line_ids)
             res = self.model.addPlaneSurface([loop])
         elif dim == 3:
             point_ids = [self.model.addPoint(*p) for p in points[:4]]
-            line_ids = [ self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:6]  ]
-            loop_ids = [self.model.addCurveLoop([line_ids[l] for l in f]) for f in faces[:4] ]
+            line_ids = [self.model.addLine(*[point_ids[p] for p in l]) for l in lines[:6]]
+            loop_ids = [self.model.addCurveLoop([line_ids[l] for l in f]) for f in faces[:4]]
             face_ids = [self.model.addPlaneSurface([loop]) for loop in loop_ids]
             surf_loop = self.model.addSurfaceLoop(face_ids)
             res = self.model.addVolume([surf_loop])
         self._need_synchronize = True
         return self.object(dim, res)
-
-
 
     def rectangle(self, xy_sides=[1, 1], center=[0, 0, 0]):
         xy_sides.append(0)
@@ -342,16 +327,15 @@ class Geometry:
     def synchronize(self):
         """
         Not clear which actions requires synchronization. Seems that it should be called after calculation of
-        new shapes and before new shapes are added explicitely.
+        new shapes and before new shapes are added explicitly.
         """
         if self._need_synchronize:
             self.model.synchronize()
             self._need_synchronize = False
 
-
     def group(self, *obj_list: 'ObjectSet') -> 'ObjectSet':
         """
-        Group any numberf of ObjectSets into a single one.
+        Group any number of ObjectSets into a single one.
         :param obj_list:
         :return:
         """
@@ -365,7 +349,6 @@ class Geometry:
                    for reg in obj.regions]
         return ObjectSet(self, all_dim_tags, regions)
 
-
     def make_rectangle(self, scale) -> int:
         # Vertices of the rectangle
         shifts = np.array([(1, 1, 0), (1, -1, 0), (-1, 1, 0), (-1, -1, 0)])
@@ -375,7 +358,6 @@ class Geometry:
         cl = self.model.addCurveLoop(lines)
         self._need_synchronize = True
         return self.model.addPlaneSurface([cl])
-
 
     def fragment(self, *object_sets: 'ObjectSet') -> List['ObjectSet']:
         """
@@ -388,7 +370,7 @@ class Geometry:
 
         try:
             new_tags, tags_map = self.model.fragment(all_dimtags, [], removeObject=True, removeTool=True)
-        except ValueError as err :
+        except ValueError as err:
             message = "\nall dimtags: {}, ...".format(str(all_dimtags[:20]))
             raise BoolOperationError(message) from err
 
@@ -408,8 +390,6 @@ class Geometry:
         self._need_synchronize = True
         return new_sets
 
-
-
     def make_fractures(self, fractures, base_shape: 'ObjectSet'):
         # From given fracture date list 'fractures'.
         # transform the base_shape to fracture objects
@@ -422,6 +402,7 @@ class Geometry:
                 .rotate(axis=fr.rotation_axis, angle=fr.rotation_angle) \
                 .translate(fr.centre) \
                 .set_region(fr.region)
+
             shapes.append(shape)
 
         fracture_fragments = self.fragment(*shapes)
@@ -469,15 +450,11 @@ class Geometry:
         if bad_entities:
             print("Bad entities:", bad_entities)
 
-
-
     def write_brep(self, filename=None):
         self.synchronize()
         if filename is None:
             filename = self.model_name
         gmsh.write(filename + '.brep')
-
-
 
     def write_mesh(self, filename: Optional[str] = None, format:MeshFormat = MeshFormat.auto) -> None:
         """
@@ -517,21 +494,17 @@ class Geometry:
     def show(self):
         gmsh.fltk.run()
 
-
-
-
     def __del__(self):
         gmsh.finalize()
-
-
-
 
 
 class BoolOperationError(Exception):
     pass
 
+
 class GetBoundaryError(Exception):
     pass
+
 
 class ObjectSet:
     def __init__(self, factory: Geometry, dim_tags: List[DimTag], regions: List[Region]) -> None:
@@ -543,10 +516,9 @@ class ObjectSet:
             assert (len(regions) == len(dim_tags))
             self.regions = regions
 
-
     @property
     def tags(self):
-        return [ tag for dim, tag in self.dim_tags ]
+        return [tag for dim, tag in self.dim_tags]
 
     @property
     def size(self):
@@ -641,7 +613,6 @@ class ObjectSet:
         reg_sets = [ObjectSet(self.factory, dimtags, [reg]) for reg, dimtags in reg_to_tags.values()]
         return reg_sets
 
-
     def split_by_dimension(self):
         """
         Split objects in ObjectSet into ObjectSets of same dimansion.
@@ -657,8 +628,6 @@ class ObjectSet:
             regions[dim].append(reg)
         sets = [ObjectSet(self.factory, dimtags, regs) for regs, dimtags in zip(regions, dimtags)]
         return sets
-
-
 
     def get_boundary_per_region(self, format=".{}"):
         """
@@ -679,7 +648,6 @@ class ObjectSet:
             b_sets.append(boundary)
         return b_sets
 
-
     def have_common_dim(self, dim_tags=None):
         if dim_tags is None:
             dim_tags = self.dim_tags
@@ -693,7 +661,6 @@ class ObjectSet:
     def dimtagreg(self):
         assert len(self.regions) == len(self.dim_tags)
         return zip(self.dim_tags, self.regions)
-
 
     def set_mesh_step(self, step):
         """
