@@ -4,6 +4,7 @@ from collections import defaultdict
 import gmsh
 import numpy as np
 import itertools
+import enum
 
 """
 Structure:
@@ -23,17 +24,27 @@ gmsh.onelab
 gmsh.logger
 
 gmsh_api, issues:
-- terrible interface to fields
+- terrible interface to fields (resolved by field.py)
+
 - get_boundary not part of geometry model (occ/geo), need lot of synchronizations
+  (resolved by automatic synchronizations)
 - all existing dimtags are meshed not only those with assigned physical groups
+  (resolved by a step before meshing that removes all objects without associated physical group)
 - physical groups are not assigned to the objects, but groups are formed from objects, 
   possible error having single object in more physical groups
+  (Not sure what happens in the case of two groups for single object, but in general the concept is a valid option.)
 - Mesh.Format option - doc do not support gmsh 2.0 format
   gmsh.write function seems to ignore the format and use extensions which are not documented
+  (Resolved. Version can be set by different option,)
 - gmsh.model.occ.setMeshSize - seems have no effect, in particular in combination with getBoundary
+  (Confirmed, replaced by similar function in other module)
 - no constant field
+  (Resolved by the shpere field)
 - gmsh.model.occ.removeAllDuplicates ... doesn't work
+  (No sure, it works at least partialy.) 
 - seems that occ.copy() doesn't preserve boundaries, so boundary dim tags are copied twice
+  (It does exactly what it is asked for just copy the given shapes)
+(Problem resolved by introduction of select_by_intersection)
 """
 
 class BoolOperationError(Exception):
@@ -84,13 +95,39 @@ Region.default_region = [Region.get("default_{}d".format(dim), dim) for dim in r
 
 
 
+class MeshFormat(enum.IntEnum):
+    msh = 1
+    unv = 2
+    msh2 = 3    # only for extension, code unknown
+    auto = 10
+    vtk = 16
+    vrml = 19
+    mail = 21
+    pos_stat = 26
+    stl = 27
+    p3d = 28
+    mesh = 30
+    bdf = 31
+    cgns = 32
+    med = 33
+    diff = 34
+    ir3 = 38
+    inp = 39
+    ply2 = 40
+    celum = 41
+    su2 = 42
+    tochnog = 47
+    neu = 49
+    matlab = 50
+
+
 DimTag = Tuple[int, int]
 
 
 
 
 
-class GeometryBase:
+class GeometryOCC:
     """
     Interface to gmsh_api.
     Single instance is allowed.
@@ -158,7 +195,7 @@ class GeometryBase:
     # synchronize
 
 
-def __init__(self, model_str, model_name, **kwargs):
+    def __init__(self, model_name, model_str='occ', **kwargs):
         if model_str == 'occ':
             self.model = gmsh.model.occ
         elif model_str == 'geo':
@@ -433,13 +470,12 @@ def __init__(self, model_str, model_name, **kwargs):
 
 
 
-class GeometryOCC(GeometryBase):
 
 
 
 
 class ObjectSet:
-    def __init__(self, factory: Geometry, dim_tags: List[DimTag], regions: List[Region]) -> None:
+    def __init__(self, factory: GeometryOCC, dim_tags: List[DimTag], regions: List[Region]) -> None:
         self.factory = factory
         self.dim_tags = dim_tags
         if len(regions) == 1:

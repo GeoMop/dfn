@@ -2,6 +2,8 @@ import attr
 from typing import Union
 import numpy as np
 from gmsh_api import gmsh
+from gmsh_api import options
+from fracture import FractureShape
 
 """
 Script for creation of a parametrized EGS model with fixed set of fractures.
@@ -56,11 +58,11 @@ def generate_mesh():
 
 
 
-    factory = gmsh.Geometry('occ', "three_frac_symmetric", verbose=True)
-    gopt = gmsh.GeometryOptions()
+    factory = gmsh.GeometryOCC("three_frac_symmetric", verbose=True)
+    gopt = options.Geometry()
     gopt.Tolerance = 1e-2
     gopt.ToleranceBoolean = 1e-3
-    gopt.MatchMeshTolerance = 1e-1
+    # gopt.MatchMeshTolerance = 1e-1
 
     # Main box
     box = factory.box(3 * [box_size]).set_region("box")
@@ -79,7 +81,7 @@ def generate_mesh():
 
     # fracutres
     fractures = [
-        FractureData(r, centre, axis, angle, region) for r, centre, axis, angle, region in
+        FractureShape(r, centre, axis, angle, region) for r, centre, axis, angle, region in
         [
             (1300, left_center,  [0, 1, 0], np.pi/6, 'left_fr'),
             (1300, right_center, [0, 1, 0], np.pi/6, 'right_fr'),
@@ -121,7 +123,7 @@ def generate_mesh():
     #frac_el_size_only = field.restrict(fracture_el_size, fractures_group, add_boundary=True)
     #field.set_mesh_step_field(frac_el_size_only)
 
-    mesh = gmsh.MeshOptions()
+    mesh = options.Mesh()
     mesh.ToleranceInitialDelaunay = 0.01
     mesh.CharacteristicLengthFromPoints = True
     mesh.CharacteristicLengthFromCurvature = True
