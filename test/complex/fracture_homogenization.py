@@ -20,7 +20,7 @@
 
 from typing import List
 import attr
-#from gmsh_api import gmsh
+from gmsh_api import gmsh
 import fracture as fg
 import numpy as np
 import os
@@ -281,7 +281,7 @@ class Realization:
 
 
 def create_samples(id_range, base_dir):
-    geo = gmsh.Geometry('occ', "three_frac_symmetric", verbose=False)
+    geo = gmsh.GeometryOCC("three_frac_symmetric", verbose=False)
 
     # Uniform fractures on sphere
     #fracture_population = fg.FisherOrientation(0, 0, 0)
@@ -536,7 +536,7 @@ def main():
     command = sys.argv[1]
     if command == 'sample':
         id_range = [int(token) for token in sys.argv[2:4]]
-        if len(sys.argv) > 3:
+        if len(sys.argv) > 4:
             base_dir = sys.argv[4]
         else:
             base_dir = "../homogenization"
