@@ -3,7 +3,10 @@ from typing import Union
 import numpy as np
 from gmsh_api import gmsh
 from gmsh_api import options
+from gmsh_api import field
 from fracture import FractureShape
+
+import gmsh as raw_gmsh
 
 """
 Script for creation of a parametrized EGS model with fixed set of fractures.
@@ -52,7 +55,7 @@ def generate_mesh():
 
     # geometry prameters
     box_size = 2000
-    well_radius = 30
+    well_radius = 100
     well_length = 3000
     well_shift = 500
 
@@ -66,6 +69,20 @@ def generate_mesh():
 
     # Main box
     box = factory.box(3 * [box_size]).set_region("box")
+    side = factory.rectangle(2 * [box_size])
+    side_z0 = side.copy().translate([0, 0, -box_size / 2])
+    side_z1 = side.copy().translate([0, 0, +box_size / 2])
+    sides = dict(
+        side_z0 = side.copy().translate([0, 0, -box_size / 2]),
+        side_z1 = side.copy().translate([0, 0, +box_size / 2]),
+        side_y0 = side_z0.copy().rotate([-1, 0, 0], np.pi / 2),
+        side_y1 = side_z1.copy().rotate([-1, 0, 0], np.pi / 2),
+        side_x0 = side_z0.copy().rotate([0, 1, 0], np.pi / 2),
+        side_x1 = side_z1.copy().rotate([0, 1, 0], np.pi / 2)
+    )
+    for name, side in sides.items():
+        side.modify_regions(name)
+
     b_box = box.get_boundary().copy()
 
     # two vertical cut-off wells, just permeable part
@@ -93,20 +110,32 @@ def generate_mesh():
     # drilled box and its boundary
     box_drilled = box.cut(left_well, right_well)
     b_box_drilled = box_drilled.get_boundary()
-    b_left_r = b_box_drilled.select_by_intersect(b_left_well).set_region(".left_well")
-    b_right_r = b_box_drilled.select_by_intersect(b_right_well).set_region(".right_well")
-    b_box_r = b_box_drilled.select_by_intersect(b_box).set_region(".outer_box")
-    box_all = factory.group(box_drilled, b_left_r, b_right_r, b_box_r)
+    # set regions for the box sides
+
+
 
     # fractures, fragmented, fractures boundary
     fractures_group = fractures_group.intersect(box_drilled.copy())
-    box_all_fr, fractures_fr = factory.fragment(box_all, fractures_group)
-    b_fractures = factory.group(*fractures_fr.get_boundary_per_region())
-    b_fractures_box = b_fractures.select_by_intersect(b_box).modify_regions("{}_box")
-    b_fr_left_well = b_fractures.select_by_intersect(b_left_well).modify_regions("{}_left_well")
-    b_fr_right_well = b_fractures.select_by_intersect(b_right_well).modify_regions("{}_right_well")
-    b_fractures = factory.group(b_fr_left_well, b_fr_right_well, b_fractures_box)
-    mesh_groups = [box_all_fr, fractures_fr, b_fractures]
+    box_fr, fractures_fr = factory.fragment(box_drilled, fractures_group)
+    # b_box_fr = box_fr.get_boundary()
+    # b_left_r = b_box_fr.select_by_intersect(b_left_well).set_region(".left_well")
+    # b_right_r = b_box_fr.select_by_intersect(b_right_well).set_region(".right_well")
+
+    box_all = []
+    # for name, side_tool in sides.items():
+    #     isec = b_box_fr.select_by_intersect(side_tool)
+    #     print(name, isec.dim_tags)
+    #     box_all.append(isec.modify_regions("." + name))
+    # box_all.extend([box_fr, b_left_r, b_right_r])
+
+    # b_fractures = factory.group(*fractures_fr.get_boundary_per_region())
+    # b_fractures_box = b_fractures.select_by_intersect(b_box).modify_regions("{}_box")
+    # b_fr_left_well = b_fractures.select_by_intersect(b_left_well).modify_regions("{}_left_well")
+    # b_fr_right_well = b_fractures.select_by_intersect(b_right_well).modify_regions("{}_right_well")
+    # b_fractures = factory.group(b_fr_left_well, b_fr_right_well, b_fractures_box)
+    #mesh_groups = [*box_all, fractures_fr, b_fractures]
+    mesh_groups = [box_fr, fractures_fr]
+
 
     factory.keep_only(*mesh_groups)
     # must be carefull with removal in order to keep dimtags that are in mesh_groups
@@ -114,23 +143,24 @@ def generate_mesh():
     factory.remove_duplicate_entities()
     factory.write_brep()
 
-    min_el_size = well_radius
+    min_el_size = well_radius / 20
     fracture_el_size = box_size / 20
     max_el_size = box_size / 10
 
+
     fractures_fr.set_mesh_step(200)
     #fracture_el_size = field.constant(100, 10000)
-    #frac_el_size_only = field.restrict(fracture_el_size, fractures_group, add_boundary=True)
+    #frac_el_size_only = field.restrict(fracture_el_size, fractures_fr, add_boundary=True)
     #field.set_mesh_step_field(frac_el_size_only)
 
     mesh = options.Mesh()
-    mesh.ToleranceInitialDelaunay = 0.01
+    mesh.ToleranceInitialDelaunay = 0.0001
     mesh.CharacteristicLengthFromPoints = True
     mesh.CharacteristicLengthFromCurvature = True
     mesh.CharacteristicLengthExtendFromBoundary = 1
     mesh.CharacteristicLengthMin = min_el_size
     mesh.CharacteristicLengthMax = max_el_size
-    mesh.MinimumCurvePoints = 5
+    mesh.MinimumCurvePoints = 12
 
     factory.make_mesh(mesh_groups)
     factory.write_mesh(format=gmsh.MeshFormat.msh2)

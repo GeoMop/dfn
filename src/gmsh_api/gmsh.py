@@ -1,9 +1,11 @@
-import attr
-from typing import TypeVar, Tuple, Optional, List
-import gmsh
-import numpy as np
 import itertools
+from typing import TypeVar, Tuple, Optional, List
 from collections import defaultdict
+import enum
+import attr
+import numpy as np
+import gmsh
+
 
 
 """
@@ -309,6 +311,24 @@ class GeometryOCC:
         self._need_synchronize = True
         return self.model.addPlaneSurface([cl])
 
+    def make_fractures(self, fractures, base_shape: 'ObjectSet'):
+        # From given fracture date list 'fractures'.
+        # transform the base_shape to fracture objects
+        # fragment fractures by their intersections
+        # return dict: fracture.region -> GMSHobject with corresponding fracture fragments
+        shapes = []
+        for fr in fractures:
+            shape = base_shape.copy()
+            shape = shape.scale([fr.rx, fr.ry, 1]) \
+                .rotate(axis=fr.rotation_axis, angle=fr.rotation_angle) \
+                .translate(fr.centre) \
+                .set_region(fr.region)
+
+            shapes.append(shape)
+
+        fracture_fragments = self.fragment(*shapes)
+        return fracture_fragments
+
     def fragment(self, *object_sets: 'ObjectSet') -> List['ObjectSet']:
         """
         Fragment given objects mutually return list of fragmented objects.
@@ -339,24 +359,6 @@ class GeometryOCC:
 
         self._need_synchronize = True
         return new_sets
-
-    def make_fractures(self, fractures, base_shape: 'ObjectSet'):
-        # From given fracture date list 'fractures'.
-        # transform the base_shape to fracture objects
-        # fragment fractures by their intersections
-        # return dict: fracture.region -> GMSHobject with corresponding fracture fragments
-        shapes = []
-        for fr in fractures:
-            shape = base_shape.copy()
-            shape = shape.scale([fr.rx, fr.ry, 1]) \
-                .rotate(axis=fr.rotation_axis, angle=fr.rotation_angle) \
-                .translate(fr.centre) \
-                .set_region(fr.region)
-
-            shapes.append(shape)
-
-        fracture_fragments = self.fragment(*shapes)
-        return fracture_fragments
 
     def _assign_physical_groups(self, obj):
         self.synchronize()
@@ -582,6 +584,8 @@ class ObjectSet:
         :return:
         TODO: Return Group
         """
+
+
         reg_sets = self.split_by_region()
         b_sets = []
         for rset in reg_sets:
@@ -589,9 +593,9 @@ class ObjectSet:
             b_reg_name = format.format(reg.name)
             b_reg = Region.get(b_reg_name, dim=reg.dim - 1)
             #self.factory.get_region_name()
-
             boundary = rset.get_boundary(combined=True).set_region(b_reg)
             b_sets.append(boundary)
+
         return b_sets
 
     def have_common_dim(self, dim_tags=None):
@@ -617,7 +621,7 @@ class ObjectSet:
         try:
             dimtags = gmsh.model.getBoundary(self.dim_tags, combined=False, oriented=False, recursive=True)
         except ValueError as err :
-            message = "\nobj dimtags: {}".format(str(self.dim_tags[:10]))
+            message = "\nobj dimtags: {} ...".format(str(self.dim_tags[:10]))
             raise GetBoundaryError(message) from err
         nodes = [(dim, tag) for dim, tag in dimtags if dim == 0]
         gmsh.model.mesh.setSize(nodes, step)
