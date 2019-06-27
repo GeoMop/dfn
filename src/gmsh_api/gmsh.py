@@ -389,6 +389,11 @@ class GeometryOCC:
     def make_mesh(self, objects: List['ObjectSet'], dim=3, eliminate=True) -> None:
         """
         Generate mesh for given objects.
+        1. set physical groups from objects regions.
+        2. OPTIONAL remove other shapes then specified
+        3. call meshing
+        4. remove duplicate nodes using tolerance Geometry.Tolerance.
+                
         :param dim: Set highest dimension to mesh.
         """
         group = self.group(*objects)

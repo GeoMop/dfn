@@ -177,7 +177,7 @@ class Geometry(OptionsBase):
         super().__init__('Geometry.')
 
         self.Tolerance = 1e-08
-        # Geometrical tolerance
+        # Geometrical tolerance, influence: MeshRemoveDuplicateNodes, mesh merging, ...
         self.ToleranceBoolean = 0.0
         # Geometrical tolerance for boolean operations
 
