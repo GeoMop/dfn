@@ -36,7 +36,7 @@ fr_base = geo.rectangle()
 
 fractures = []
 for i in range(n_fractures):
-    if i%1000 == 0:
+    if i % 1000 == 0:
         print('done ... {}% ({}/{})'.format(100*i/n_fractures, i, n_fractures))
     fr_a = fischer.sample_axis_angle()[0]
     axis, angle = fr_a[:3], fr_a[3]

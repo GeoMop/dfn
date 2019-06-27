@@ -6,7 +6,8 @@ It provides appropriate statistical models as well as practical sampling methods
 from typing import Union, List
 import numpy as np
 import attr
-
+import json
+from sklearn.preprocessing import normalize
 
 
 @attr.s(auto_attribs=True)
@@ -36,7 +37,6 @@ class FractureShape:
         return self.r * self.aspect
 
 
-
 class Quat:
     """
     Simple quaternion class as numerically more stable alternative to the Orientation methods.
@@ -57,9 +57,8 @@ class Quat:
         z = w1 * z2 + z1 * w2 + x1 * y2 - y1 * x2
         return Quat((w, x, y, z))
 
-
     @staticmethod
-    def from_euler(a:float, b:float, c:float) -> 'Quat':
+    def from_euler(a: float, b: float, c: float) -> 'Quat':
         """
         X-Y-Z Euler angles to quaternion
         :param a: angle to rotate around Z
@@ -71,21 +70,21 @@ class Quat:
                 Quat([np.cos(b / 2), 0, np.sin(b / 2), 0]) @\
                 Quat([np.cos(c / 2), np.sin(c / 2), 0, 0])
 
-    def axisangle_to_q(v, theta):
+    def axisangle_to_q(self, v, theta):
         # convert rotation given by axis 'v' and angle 'theta' to quaternion representation
         v = normalize(v)
         x, y, z = v
         theta /= 2
-        w = cos(theta)
-        x = x * sin(theta)
-        y = y * sin(theta)
-        z = z * sin(theta)
+        w = np.cos(theta)
+        x = x * np.sin(theta)
+        y = y * np.sin(theta)
+        z = z * np.sin(theta)
         return w, x, y, z
 
-    def q_to_axisangle(q):
+    def q_to_axisangle(self, q):
         # convert from quaternion to ratation given by axis and angle
         w, v = q[0], q[1:]
-        theta = acos(w) * 2.0
+        theta = np.acos(w) * 2.0
         return normalize(v), theta
 
 
@@ -103,7 +102,7 @@ class FisherOrientation:
     # - the intersection of the fracture with the horizontal plane
     plunge: float
     # mean fracture normal, angle between the normal and the horizontal plane
-    # ralated term is the dip = 90 - plunge; that is the angle between the fracture and the horizontal plane
+    # related term is the dip = 90 - plunge; that is the angle between the fracture and the horizontal plane
     #
     # strike and dip can by understood as the first two Eulerian angles.
     dispersion: float
@@ -115,7 +114,6 @@ class FisherOrientation:
         Initialize from (strike, dip, concentration==dispersion)
         """
         return FisherOrientation(strike + 90, 90 - dip, dispersion)
-
 
     def _sample_standard_fisher(self, n) -> np.array:
         """
@@ -171,7 +169,7 @@ class FisherOrientation:
         # sin_angle = np.sqrt(1-cos_angle**2)
 
         axes = np.cross(z_axis, norms, axisb=1)
-        ax_norm = np.maximum( np.linalg.norm(axes, axis=1), 1e-200)
+        ax_norm = np.maximum(np.linalg.norm(axes, axis=1), 1e-200)
         axes = axes / ax_norm[:, None]
 
         return np.concatenate([axes, angles[:, None]], axis=1)
@@ -246,13 +244,13 @@ class PowerLawSize:
     # number of fractures with size in the size_range per unit volume, denoted also P30
     sample_range: (float, float)
     # range used for sampling., not part of the statistical description
+    p_32: float
 
     def _cdf(self, x, min, max):
         # Distribution function
         pmin = min ** (-self.power)
         pmax = max ** (-self.power)
         return (pmin - x ** (-self.power))/(pmin - pmax)
-
 
     def _ppf(self, x, min, max):
         # Quantile function
@@ -290,7 +288,6 @@ class PowerLawSize:
         """
         return self._sample_intensity * volume
 
-
     def sample(self, volume, size=None):
         """
         Sample the fracture diameters.
@@ -298,12 +295,13 @@ class PowerLawSize:
         """
         if size is None:
             size = np.random.poisson(lam=self.mean_size(volume), size=1)
-        U = np.random.rand(size=size)
+        U = np.random.rand(np.squeeze(size))
         return self._ppf(U, self._sample_range[0], self._sample_range[1])
 
-
-
-
+    @staticmethod
+    def calculate_p_30(p_32, exp, size_range):
+        return p_32 / (-exp * (size_range[1] ** (2 - exp) - size_range[0] ** (2 - exp)) / (2 - exp) / (
+                    size_range[1] ** (-exp) - size_range[0] ** (-exp)))
 
 # @attr.s(auto_attribs=True)
 # class PoissonIntensity:
@@ -322,36 +320,54 @@ class FrFamily:
     shape: PowerLawSize
 
 
-class Populatfion:
+class Population:
     """
     Data class to describe whole population of fractures, several families.
     """
     def __init__(self, volume):
         """
-        :param orientation: Orientation stochastic model
-        :param size: Size stochastic model.
-        :param intenzity: Stochastic model.
+        :param volume: Orientation stochastic model
         """
         self.volume = volume
         self.families = []
 
-
     @staticmethod
-    def load(json_stream):
+    def load(json_file, volume=1):
         """
         Load families from a JSON stream. Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
-        :param json_stream:
+        :param json_file: JSON file with families data
+        :param volume: Cube volume
         :return: Population instance.
         """
+        with open(json_file) as f:
+            families = json.load(f)
 
+        pop = Population(volume)
+        for family in families:
+            fisher_orientation = FisherOrientation(family.get("trend"), family.get("plunge"), 0)
+            size_range = [family.get("r_min"), family.get("r_max")]
+            p_30 = PowerLawSize.calculate_p_30(family.get("p_32"), family.get("kappa"), size_range)
 
-    def add_family(self, name, position, shape):
-        self.families.append( FrFamily(name, position, shape) )
+            power_law_size = PowerLawSize(power=family.get("kappa"), diam_range=size_range, intensity=p_30,
+                                          sample_range=size_range, p_32=family.get("p_32"))
 
+            power_law_size.set_sample_range(size_range)
+            pop.add_family(family.get("name"), fisher_orientation, power_law_size)
+
+        return pop
+
+    def add_family(self, name, orientation, shape):
+        """
+        Add fracture family
+        :param name: str, Fracture family name
+        :param orientation: FisherOrientation instance
+        :param shape: PowerLawSize instance
+        :return:
+        """
+        self.families.append(FrFamily(name, orientation, shape))
 
     def mean_size(self):
-        return sum(( family.shape.mean_size(self.volume) for family in self.families))
-
+        return sum((family.shape.mean_size(self.volume) for family in self.families))
 
     def set_sample_range(self, sample_range, max_sample_size=None):
         """
@@ -365,11 +381,10 @@ class Populatfion:
             f.shape.set_sample_range(sample_range)
         if max_sample_size is not None:
             total_size = self.mean_size()
+
             if total_size > max_sample_size:
                 for f in self.families:
-                    f.shape.set_range_by_intensity( f.mean_size(volume) / total_size * max_sample_size / self.volume)
-
-
+                    f.shape.set_range_by_intensity(f.mean_size(self.volume) / total_size * max_sample_size / self.volume)
 
     def sample(self):
         """
@@ -381,15 +396,16 @@ class Populatfion:
             name = f.name
             diams = f.shape.sample(self.volume)
             fr_axis_angle = f.orientation.sample_axis_angle(len(diams))
-            centers = np.random.rand(len(diams), 3)
+
+            # centers = np.random.rand(len(diams), 3)
+            size = np.cbrt(self.volume)
+            centers = np.random.uniform(-size/2, size/2, (len(diams), 3))
+
             for r, aa, c in zip(diams, fr_axis_angle, centers):
                 axis, angle = aa[:3], aa[3]
                 fractures.append(FractureShape(r, c, axis, angle, name, 1))
         return fractures
-#
-#
-#
-#
+
 #
 # class FractureGenerator:
 #     def __init__(self, frac_type):
@@ -431,5 +447,4 @@ class Populatfion:
 #                 data.append(d)
 #
 #         return data
-#
 #
