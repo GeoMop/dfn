@@ -33,30 +33,7 @@ gmsh_api, issues:
 """
 
 
-class MeshFormat(enum.IntEnum):
-    msh = 1
-    unv = 2
-    msh2 = 3    # only for extension, code unknown
-    auto = 10
-    vtk = 16
-    vrml = 19
-    mail = 21
-    pos_stat = 26
-    stl = 27
-    p3d = 28
-    mesh = 30
-    bdf = 31
-    cgns = 32
-    med = 33
-    diff = 34
-    ir3 = 38
-    inp = 39
-    ply2 = 40
-    celum = 41
-    su2 = 42
-    tochnog = 47
-    neu = 49
-    matlab = 50
+
 
 
 class Algorithm2d(enum.IntEnum):
@@ -137,7 +114,7 @@ class OptionsBase:
 
 
     def instance_setattr(self, key, value):
-        assert key in self.names_map
+        assert key in self.names_map, "Unknown option {}.".format(key)
         gmsh_name, option_type = self.names_map[key]
         full_name = self.prefix + gmsh_name
         if isinstance(value, (int, float, bool)):
@@ -204,8 +181,9 @@ class Geometry(OptionsBase):
         self.ToleranceBoolean = 0.0
         # Geometrical tolerance for boolean operations
 
-        # Following options seems to be used for matching GMSH mesh and geometry files.
-        # Seems to be specific to GUI.
+
+        # According to the GMSH source it seems that following options are used for matching GMSH mesh and geometry
+        # during the "Merge" operation in GUI.
         # self.MatchGeomAndMesh = False
         # # Matches geometries and meshes.
         # self.MatchMeshScaleFactor = 1
