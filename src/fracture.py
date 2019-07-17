@@ -105,15 +105,15 @@ class FisherOrientation:
     # related term is the dip = 90 - plunge; that is the angle between the fracture and the horizontal plane
     #
     # strike and dip can by understood as the first two Eulerian angles.
-    dispersion: float
-    # the dispersion parameter; 0 = uniform dispersion, infty - no dispersion
+    concentration: float
+    # the concentration parameter; 0 = uniform dispersion, infty - no dispersion
 
     @staticmethod
-    def strike_dip(strike, dip, dispersion):
+    def strike_dip(strike, dip, concentration):
         """
-        Initialize from (strike, dip, concentration==dispersion)
+        Initialize from (strike, dip, concentration)
         """
-        return FisherOrientation(strike + 90, 90 - dip, dispersion)
+        return FisherOrientation(strike + 90, 90 - dip, concentration)
 
     def _sample_standard_fisher(self, n) -> np.array:
         """
@@ -121,7 +121,7 @@ class FisherOrientation:
         :param n:
         :return: array of normals (n, 3)
         """
-        if self.dispersion == np.inf:
+        if self.concentration == np.inf:
             normals = np.zeros((n, 3))
             normals[:, 2] = 1.0
         else:
@@ -129,12 +129,12 @@ class FisherOrientation:
             psi = 2 * np.pi * np.random.uniform(size=n)
             cos_psi = np.cos(psi)
             sin_psi = np.sin(psi)
-            if self.dispersion == 0:
+            if self.concentration == 0:
                 cos_theta = 1 - 2 * unif
             else:
-                exp_k = np.exp(self.dispersion)
+                exp_k = np.exp(self.concentration)
                 exp_ik = 1 / exp_k
-                cos_theta = np.log(exp_k - unif * ( exp_k - exp_ik) ) / self.dispersion
+                cos_theta = np.log(exp_k - unif * ( exp_k - exp_ik) ) / self.concentration
             sin_theta = np.sqrt(1 - cos_theta**2)
             normals = np.stack((sin_psi * cos_theta, cos_psi * cos_theta, sin_theta), axis=1)
         return normals
@@ -229,37 +229,60 @@ class FisherOrientation:
 @attr.s(auto_attribs=True)
 class PowerLawSize:
     """
-    Truncated Power Law model for the fracture size distribution.
-    density:
+    Truncated Power Law distribution for the fracture size 'r'.
+    The density function:
 
     f(r) = f_0 r ** (-power - 1)
 
-    on [size_min, size_max], zero elsewhere.
+    for 'r' in [size_min, size_max], zero elsewhere.
+
+    The class allows to set a different (usually reduced) sampling range for the fracture sizes,
+    one can either use `set_sample_range` to directly set the sampling range or just increase the lower bound to meet
+    prescribed fracture intensity via the `set_range_by_intansity` method.
+
     """
     power: float
     # power of th power law
     diam_range: (float, float)
     # lower and upper bound of the power law for the fracture diameter (size), values for which the intensity is given
     intensity: float
-    # number of fractures with size in the size_range per unit volume, denoted also P30
-    sample_range: (float, float)
-    # range used for sampling., not part of the statistical description
-    p_32: float
+    # number of fractures with size in the size_range per unit volume (denoted as P30 in SKB reports)
 
-    def _cdf(self, x, min, max):
-        # Distribution function
+    sample_range: (float, float) = attr.ib()
+    # range used for sampling., not part of the statistical description
+    @sample_range.default
+    def copy_full_range(self):
+        a, b = self.diam_range
+        return [a,b]        # need copy to preserve original range
+
+    @classmethod
+    def from_mean_area(cls, power, diam_range, p32):
+        return cls(power, diam_range, cls.intensity_for_mean_area(p32, power, diam_range))
+
+    def cdf(self, x, range):
+        """
+        Power law distribution function for the given support interval (min, max).
+        """
+        min, max = range
         pmin = min ** (-self.power)
         pmax = max ** (-self.power)
         return (pmin - x ** (-self.power))/(pmin - pmax)
 
-    def _ppf(self, x, min, max):
-        # Quantile function
+    def ppf(self, x, range):
+        """
+        Power law quantile (inverse distribution) function for the given support interval (min, max).
+        """
+        min, max = range
         pmin = min ** (-self.power)
         pmax = max ** (-self.power)
         scaled = pmin - x*(pmin - pmax)
         return scaled ** (-1 / self.power)
 
     def range_intensity(self, range):
+        """
+        Computes the fracture intensity (P30) for different given fracture size range.
+        :param range: (min, max) - new fracture size range
+        """
         a, b = self.diam_range
         c, d = range
         k = self.power
@@ -267,41 +290,72 @@ class PowerLawSize:
 
     def set_sample_range(self, sample_range=None):
         """
-        Rescale to the new
-        :param sample_range:
-        :return:
+        Set the range for the fracture sampling.
+        :param sample_range: (min, max), None to reset to the full range.
         """
         if sample_range is None:
-            sample_range = self.diam_range
-        self._sample_range = sample_range
-        self._sample_intensity = self.range_intensity(self._sample_range)
+            sample_range = list(self.diam_range)
+        self.sample_range = sample_range
 
     def set_range_by_intensity(self, intensity):
+        """
+        Increase lower fracture size bound of the sample range in order to achieve target fracture intensity.
+        """
         a, b = self.diam_range
         c, d = self.sample_range
         k = self.power
-        self.sample_range[0] = (intensity * (a**(-k) - b**(-k)) / self.intensity + d**(-k)) ** (-1/k)
+        lower_bound = (intensity * (a**(-k) - b**(-k)) / self.intensity + d**(-k)) ** (-1/k)
+        self.sample_range[0] = lower_bound
 
-    def mean_size(self, volume):
+    def mean_size(self, volume=1.0):
         """
-        :return: Mean of number of fractures.
+        :return: Mean number of fractures for given volume
         """
-        return self._sample_intensity * volume
+        sample_intensity = self.range_intensity(self.sample_range)
+        return sample_intensity * volume
 
     def sample(self, volume, size=None):
         """
         Sample the fracture diameters.
-        :return:
+        :param volume: By default the volume and fracture sample intensity is used to determine actual number of the fractures.
+        :param size: ... alternatively the prescribed number of fractures can be generated.
+        :return: Array of fracture sizes.
         """
         if size is None:
             size = np.random.poisson(lam=self.mean_size(volume), size=1)
         U = np.random.rand(np.squeeze(size))
-        return self._ppf(U, self._sample_range[0], self._sample_range[1])
+        return self.ppf(U, self.sample_range)
+
+    def mean_area(self, volume=1.0, shape_area=1.0):
+        """
+        Compute mean fracture surface area from current sample range intensity.
+        :param shape_area: Area of the unit fracture shape (1 for square, 'pi/4' for disc)
+        :return:
+        """
+        sample_intensity = volume * self.range_intensity(self.sample_range)
+        a, b = self.sample_range
+        exp = self.power
+        integral_area = (b ** (2 - exp) - a ** (2 - exp)) / (2 - exp)
+        integral_intensity = (b ** (-exp) - a ** (-exp)) / -exp
+        p_32 = sample_intensity / integral_intensity * integral_area * shape_area
+        return p_32
 
     @staticmethod
-    def calculate_p_30(p_32, exp, size_range):
-        return p_32 / (-exp * (size_range[1] ** (2 - exp) - size_range[0] ** (2 - exp)) / (2 - exp) / (
-                    size_range[1] ** (-exp) - size_range[0] ** (-exp)))
+    def intensity_for_mean_area(p_32, exp, size_range, shape_area=1.0):
+        """
+        Compute fracture intensity from the mean fracture surface area per unit volume.
+        :param p_32: mean fracture surface area
+        :param exp: power law exponent
+        :param size_range: fracture size range
+        :param shape_area: Area of the unit fracture shape (1 for square, 'pi/4' for disc)
+        :return: p30 - fracture intensity
+        """
+        a, b = size_range
+        integral_area = (b ** (2 - exp) - a ** (2 - exp)) / (2 - exp)
+        integral_intensity = (b ** (-exp) - a ** (-exp)) / -exp
+        return p_32 / integral_area / shape_area * integral_intensity
+
+
 
 # @attr.s(auto_attribs=True)
 # class PoissonIntensity:
@@ -315,15 +369,54 @@ class PowerLawSize:
 
 @attr.s(auto_attribs=True)
 class FrFamily:
+    """
+    Describes a single fracture family with defined orientation and shape distributions.
+    """
     name: str
     orientation: FisherOrientation
     shape: PowerLawSize
 
 
+
 class Population:
     """
     Data class to describe whole population of fractures, several families.
+    Supports sampling across the families.
     """
+
+
+    def initialize(self, families):
+        """
+        Load families from a list of dict, with keywords: [ name, trend, plunge, concentration, power, r_min, r_max, p_32 ]
+        Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
+        :param families json_file: JSON file with families data
+        """
+        for family in families:
+            fisher_orientation = FisherOrientation(family["trend"], family["plunge"], family["concentration"])
+            size_range = (family["r_min"], family["r_max"])
+            power_law_size = PowerLawSize.from_mean_area(family["power"], size_range, family["p_32"])
+            assert np.isclose(family["p_32"], power_law_size.mean_area())
+            self.add_family(family["name"], fisher_orientation, power_law_size)
+
+
+    def init_from_json(self, json_file):
+        """
+        Load families from a JSON file. Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
+        :param json_file: JSON file with families data
+        """
+        with open(json_file) as f:
+            self.initialize(json.load(f))
+
+    def init_from_yaml(self, yaml_file):
+        """
+        Load families from a YAML file. Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
+        :param json_file: YAML file with families data
+        """
+        with open(yaml_file) as f:
+            self.initialize(json.load(f))
+
+
+
     def __init__(self, volume):
         """
         :param volume: Orientation stochastic model
@@ -331,30 +424,6 @@ class Population:
         self.volume = volume
         self.families = []
 
-    @staticmethod
-    def load(json_file, volume=1):
-        """
-        Load families from a JSON stream. Assuming fixed statistical model: Fischer, Uniform, PowerLaw Poisson
-        :param json_file: JSON file with families data
-        :param volume: Cube volume
-        :return: Population instance.
-        """
-        with open(json_file) as f:
-            families = json.load(f)
-
-        pop = Population(volume)
-        for family in families:
-            fisher_orientation = FisherOrientation(family.get("trend"), family.get("plunge"), 0)
-            size_range = [family.get("r_min"), family.get("r_max")]
-            p_30 = PowerLawSize.calculate_p_30(family.get("p_32"), family.get("kappa"), size_range)
-
-            power_law_size = PowerLawSize(power=family.get("kappa"), diam_range=size_range, intensity=p_30,
-                                          sample_range=size_range, p_32=family.get("p_32"))
-
-            power_law_size.set_sample_range(size_range)
-            pop.add_family(family.get("name"), fisher_orientation, power_law_size)
-
-        return pop
 
     def add_family(self, name, orientation, shape):
         """
@@ -388,8 +457,8 @@ class Population:
 
     def sample(self):
         """
-        Provide a single fracture sample from the population.
-        :return:
+        Provide a single fracture set  sample from the population.
+        :return: List of FractureShapes.
         """
         fractures = []
         for f in self.families:
