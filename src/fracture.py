@@ -7,7 +7,6 @@ from typing import Union, List
 import numpy as np
 import attr
 import json
-from sklearn.preprocessing import normalize
 
 
 @attr.s(auto_attribs=True)
@@ -72,7 +71,7 @@ class Quat:
 
     def axisangle_to_q(self, v, theta):
         # convert rotation given by axis 'v' and angle 'theta' to quaternion representation
-        v = normalize(v)
+        v = v / np.linalg.norm(v)
         x, y, z = v
         theta /= 2
         w = np.cos(theta)
@@ -85,7 +84,7 @@ class Quat:
         # convert from quaternion to ratation given by axis and angle
         w, v = q[0], q[1:]
         theta = np.acos(w) * 2.0
-        return normalize(v), theta
+        return v / np.linalg.norm(v), theta
 
 
 @attr.s(auto_attribs=True)
@@ -252,8 +251,7 @@ class PowerLawSize:
     # range used for sampling., not part of the statistical description
     @sample_range.default
     def copy_full_range(self):
-        a, b = self.diam_range
-        return [a,b]        # need copy to preserve original range
+        return list(self.diam_range).copy()  # need copy to preserve original range
 
     @classmethod
     def from_mean_area(cls, power, diam_range, p32):
@@ -294,8 +292,8 @@ class PowerLawSize:
         :param sample_range: (min, max), None to reset to the full range.
         """
         if sample_range is None:
-            sample_range = list(self.diam_range)
-        self.sample_range = sample_range
+            sample_range = self.diam_range
+        self.sample_range = list(sample_range).copy()
 
     def set_range_by_intensity(self, intensity):
         """
@@ -436,7 +434,8 @@ class Population:
         self.families.append(FrFamily(name, orientation, shape))
 
     def mean_size(self):
-        return sum((family.shape.mean_size(self.volume) for family in self.families))
+        sizes = [family.shape.mean_size(self.volume) for family in self.families]
+        return sum(sizes)
 
     def set_sample_range(self, sample_range, max_sample_size=None):
         """
@@ -449,11 +448,13 @@ class Population:
         for f in self.families:
             f.shape.set_sample_range(sample_range)
         if max_sample_size is not None:
-            total_size = self.mean_size()
+            family_sizes = [family.shape.mean_size(self.volume) for family in self.families]
+            total_size = np.sum(family_sizes)
 
             if total_size > max_sample_size:
-                for f in self.families:
-                    f.shape.set_range_by_intensity(f.mean_size(self.volume) / total_size * max_sample_size / self.volume)
+                for f, size in zip(self.families, family_sizes):
+                    family_intensity = size / total_size * max_sample_size / self.volume
+                    f.shape.set_range_by_intensity(family_intensity)
 
     def sample(self):
         """
