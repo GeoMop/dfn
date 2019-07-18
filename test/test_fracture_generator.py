@@ -3,7 +3,9 @@ import pytest
 import src.fracture as frac
 
 from collections import defaultdict
-
+# TODO:
+# improve statistical tests for the Fisher distr
+# - test for mean orientation in the case of inf concentration
 
 def test_fisher_orientation():
     normals = [[0, 0, 1], [0, 1, 0], [1, 0, 0], [0.01, 0, 1]]
@@ -19,9 +21,9 @@ def test_fisher_orientation():
     sin_pi_4 = np.sin(np.pi / 4)
     sin_pi_3 = np.sin(np.pi / 3)
     normal = fr.sample_normal()
-    assert np.allclose([0.5*sin_pi_4, 0.5*sin_pi_4, sin_pi_3], normal)
+    assert np.allclose([0.5*sin_pi_4, 0.5*sin_pi_4, -sin_pi_3], normal)
     aa = fr.sample_axis_angle()
-    assert np.allclose([-sin_pi_4, sin_pi_4, 0, np.pi/6], aa)
+    assert np.allclose([-sin_pi_4, sin_pi_4, 0, np.pi - np.pi/6], aa)
 
 
 def ecdf(data):

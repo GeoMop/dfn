@@ -22,6 +22,8 @@ class FractureShape:
     # axis of rotation
     rotation_angle: float
     # angle of rotation around the axis (?? counterclockwise with axis pointing up)
+    shape_angle: float
+    # angle to rotate the unit shape around z-axis
     region: Union[str, int]
     # name or ID of the physical group
     aspect: float = 1
@@ -93,14 +95,22 @@ class FisherOrientation:
     Distribution for random orientation in 3d.
 
     Coordinate system: X - east, Y - north, Z - up
+
+    strike, dip - used for the orientation of the planar geological features
+    trend, plunge - used for the orientation of the line geological features
+
+    As the distribution is considerd as distribution of the fracture normal vectors we use
+    trend, plunge as the primal parameters.
     """
 
     trend: float
-    # mean fracture normal, azimuth of its projection to the horizontal plane
+    # mean fracture normal (pointing down)
+    # azimuth (0, 360) of the normal's projection to the horizontal plane
     # related term is the strike =  trend - 90; that is azimuth of the strike line
     # - the intersection of the fracture with the horizontal plane
     plunge: float
-    # mean fracture normal, angle between the normal and the horizontal plane
+    # mean fracture normal (pointing down)
+    # angle (0, 90) between the normal and the horizontal plane
     # related term is the dip = 90 - plunge; that is the angle between the fracture and the horizontal plane
     #
     # strike and dip can by understood as the first two Eulerian angles.
@@ -120,7 +130,7 @@ class FisherOrientation:
         :param n:
         :return: array of normals (n, 3)
         """
-        if self.concentration == np.inf:
+        if self.concentration > np.log(np.finfo(float).max):
             normals = np.zeros((n, 3))
             normals[:, 2] = 1.0
         else:
@@ -135,9 +145,10 @@ class FisherOrientation:
                 exp_ik = 1 / exp_k
                 cos_theta = np.log(exp_k - unif * ( exp_k - exp_ik) ) / self.concentration
             sin_theta = np.sqrt(1 - cos_theta**2)
-            normals = np.stack((sin_psi * cos_theta, cos_psi * cos_theta, sin_theta), axis=1)
+            # theta = 0 for the up direction, theta = pi  for the down direction
+            normals = np.stack((sin_psi * sin_theta, cos_psi * sin_theta, cos_theta), axis=1)
         return normals
-        # rotate to mean strike and dip
+
 
     def sample_normal(self, size=1):
         """
@@ -197,10 +208,9 @@ class FisherOrientation:
     def _mean_normal(self):
         trend = np.radians(self.trend)
         plunge = np.radians(self.plunge)
-
         normal = np.array( [np.sin(trend) * np.cos(plunge),
                             np.cos(trend) * np.cos(plunge),
-                            np.sin(plunge)])
+                            -np.sin(plunge)])
 
         #assert np.isclose(np.linalg.norm(normal), 1, atol=1e-15)
         return normal
@@ -312,7 +322,7 @@ class PowerLawSize:
         sample_intensity = self.range_intensity(self.sample_range)
         return sample_intensity * volume
 
-    def sample(self, volume, size=None):
+    def sample(self, volume, size=None, keep_nonempty=False):
         """
         Sample the fracture diameters.
         :param volume: By default the volume and fracture sample intensity is used to determine actual number of the fractures.
@@ -321,7 +331,11 @@ class PowerLawSize:
         """
         if size is None:
             size = np.random.poisson(lam=self.mean_size(volume), size=1)
-        U = np.random.rand(np.squeeze(size))
+            if keep_nonempty:
+
+                size = max(1, size)
+        print(keep_nonempty, size)
+        U = np.random.uniform(0, 1, int(size))
         return self.ppf(U, self.sample_range)
 
     def mean_area(self, volume=1.0, shape_area=1.0):
@@ -364,6 +378,16 @@ class PowerLawSize:
 #     size_max:
 #     def sample(self, box_min, box_max):
 
+@attr.s(auto_attribs=True)
+class UniformBoxPosition:
+    dimensions: List[float]
+    center: List[float] = [0,0,0]
+
+    def sample(self, size=1):
+        pos = np.empty((size, 3), dtype=float)
+        for i in range(3):
+            pos[:, i] =  np.random.uniform(self.center[i] - self.dimensions[i]/2, self.center[i] + self.dimensions[i]/2, size)
+        return pos
 
 @attr.s(auto_attribs=True)
 class FrFamily:
@@ -456,24 +480,27 @@ class Population:
                     family_intensity = size / total_size * max_sample_size / self.volume
                     f.shape.set_range_by_intensity(family_intensity)
 
-    def sample(self):
+    def sample(self, pos_distr = None, keep_nonempty=False):
         """
         Provide a single fracture set  sample from the population.
+        :param pos_distr: Fracture position distribution, common to all families.
+        An object with method .sample(size) returning array of positions (size, 3).
         :return: List of FractureShapes.
         """
+        if pos_distr is None:
+            size = np.cbrt(self.volume)
+            pos_distr = UniformBoxPosition([size, size, size])
+
         fractures = []
         for f in self.families:
             name = f.name
-            diams = f.shape.sample(self.volume)
-            fr_axis_angle = f.orientation.sample_axis_angle(len(diams))
-
-            # centers = np.random.rand(len(diams), 3)
-            size = np.cbrt(self.volume)
-            centers = np.random.uniform(-size/2, size/2, (len(diams), 3))
-
-            for r, aa, c in zip(diams, fr_axis_angle, centers):
+            diams = f.shape.sample(self.volume, keep_nonempty=keep_nonempty)
+            fr_axis_angle = f.orientation.sample_axis_angle(size = len(diams))
+            centers = pos_distr.sample(size = len(diams))
+            shape_angle = np.random.uniform(0, 2 * np.pi, len(diams))
+            for r, aa, c, sa in zip(diams, fr_axis_angle, centers, shape_angle):
                 axis, angle = aa[:3], aa[3]
-                fractures.append(FractureShape(r, c, axis, angle, name, 1))
+                fractures.append(FractureShape(r, c, axis, angle, sa, name, 1))
         return fractures
 
 #
