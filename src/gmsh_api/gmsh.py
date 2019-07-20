@@ -276,6 +276,30 @@ class GeometryOCC:
         self._need_synchronize = True
         return self.object(3, cylinder_tag)
 
+    def cylinder(self, r=1, axis=[0, 0, 1], center=[0, 0, 0]):
+        cylinder_tag = self.model.addCylinder(*center, *axis, r)
+        self._need_synchronize = True
+        return self.object(3, cylinder_tag)
+
+    def make_polygon(self, points, mesh_step=None):
+        """
+        Add a polygon given by vertices. Assume thay are coplanar.
+        :param mesh_step: scalar or array (N,)
+        :param points: Array (N, 3) of points.
+        """
+        if mesh_step is None:
+            mesh_step = 0.0
+        if type(mesh_step) is float:
+            mesh_step = np.full(len(points), mesh_step)
+        vertices = [self.model.addPoint(*p, step, tag=-1) for p, step in zip(points, mesh_step)]
+        vertices.append(vertices[0])
+        lines = [self.model.addLine(a, b) for a,b in zip(vertices[0:-1], vertices[1:])]
+        loop = self.model.addCurveLoop(lines, tag=-1)
+        surface = self.model.addPlaneSurface([loop], tag=-1)
+        return self.object(2, surface)
+
+
+
     def synchronize(self):
         """
         Not clear which actions requires synchronization. Seems that it should be called after calculation of
@@ -317,8 +341,9 @@ class GeometryOCC:
         # fragment fractures by their intersections
         # return dict: fracture.region -> GMSHobject with corresponding fracture fragments
         shapes = []
-        for fr in fractures:
+        for i, fr in enumerate(fractures):
             shape = base_shape.copy()
+            print("fr: ", i, "tag: ", shape.dim_tags)
             shape = shape.scale([fr.rx, fr.ry, 1]) \
                 .rotate(axis=fr.rotation_axis, angle=fr.rotation_angle) \
                 .translate(fr.centre) \
@@ -395,6 +420,7 @@ class GeometryOCC:
         4. remove duplicate nodes using tolerance Geometry.Tolerance.
                 
         :param dim: Set highest dimension to mesh.
+        :param eliminate:
         """
         group = self.group(*objects)
         self._assign_physical_groups(group)
@@ -619,7 +645,8 @@ class ObjectSet:
 
     def set_mesh_step(self, step):
         """
-        Set mesh step 'step' to all nodes of the objects in the ObejctSet.
+        Set mesh step 'step' to all nodes of the objects in the ObjectSet.
+        TODO: be resistent to nonexisting dimtags
         """
         # Get boundary resursive to obtain nodes
         self.factory.synchronize()
@@ -746,7 +773,7 @@ class ObjectSet:
         self.regions = None
 
     def mass(self):
-        return sum((self.factory.model.getMass(dimtag) for dimtag in self.dim_tags))
+        return sum((self.factory.model.getMass(*dimtag) for dimtag in self.dim_tags))
 
     def center_of_mass(self):
         center = np.zeros(3)
@@ -759,3 +786,17 @@ class ObjectSet:
             return center/mass_total, mass_total
         else:
             return 0, 0
+
+    def remove_small_mass(self, mass_limit):
+        """
+        Remove objects with the mass under the limit.
+        """
+        masses = [self.factory.model.getMass(*dt) for dt in self.dim_tags]
+        #for dt, mass in zip(self.dim_tags, masses):
+        #    print(dt, mass)
+
+        dimtags = [dt for dt, m in zip(self.dim_tags, masses) if m > mass_limit]
+        regions = [r for r, m in zip(self.regions, masses) if m > mass_limit]
+        self.dim_tags = dimtags
+        self.regions = regions
+        return self

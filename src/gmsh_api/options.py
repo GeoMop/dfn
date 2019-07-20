@@ -161,7 +161,8 @@ class Mesh(OptionsBase):
         # Type of quality measure (TODO: ?? is it used in the mesh optimizer)
 
         self.MinimumCirclePoints = 6
-        # Minimum number of points used to mesh a circle
+        # Specify point density for curves when CharacteristicLengthFromCurvature is ON.
+        # Minimum number of points used to mesh a full circle.
         self.MinimumCurvePoints = 6
         # Minimum number of points used to mesh a (non-straight) curve
 

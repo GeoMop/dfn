@@ -27,7 +27,7 @@ class FractureShape:
     region: Union[str, int]
     # name or ID of the physical group
     aspect: float = 1
-    # aspect ratio of the fracture, y_length : x_length, x_length == r
+    # aspect ratio of the fracture =  y_length / x_length where  x_length == r
 
     @property
     def rx(self):
@@ -369,6 +369,11 @@ class PowerLawSize:
 
 
 
+
+
+
+
+
 # @attr.s(auto_attribs=True)
 # class PoissonIntensity:
 #     p32: float
@@ -545,3 +550,122 @@ class Population:
 #
 #         return data
 #
+
+
+
+
+def unit_square_vtxs():
+    return np.array([
+                [-0.5, -0.5, 0],
+                [0.5, -0.5, 0],
+                [0.5, 0.5, 0],
+                [-0.5, 0.5, 0]])
+
+
+class Fractures:
+
+    def __init__(self, fractures):
+        self.fractures = fractures
+        self.squares = None
+        # Array of shape (N, 4, 3), coordinates of the vertices of the square fractures.
+        self.compute_transformed_shapes()
+
+    def compute_transformed_shapes(self):
+        n_frac = len(self.fractures)
+
+        unit_square = unit_square_vtxs()
+        z_axis = np.array([0, 0, 1])
+        squares = np.tile(unit_square[None, :, :], (n_frac, 1, 1))
+        center = np.empty((n_frac, 3))
+        trans_matrix = np.empty((n_frac, 3, 3))
+        for i, fr in enumerate(self.fractures):
+            vtxs = squares[i, :, :]
+            vtxs[:, 1] *= fr.aspect
+            vtxs[:, :] *= fr.r
+            vtxs = FisherOrientation.rotate(vtxs, z_axis, fr.shape_angle)
+            vtxs = FisherOrientation.rotate(vtxs, fr.rotation_axis, fr.rotation_angle)
+            vtxs += fr.centre
+            squares[i, :, :] = vtxs
+
+            center[i, :] = fr.centre
+            u_vec = vtxs[1] - vtxs[0]
+            u_vec /= (u_vec @ u_vec)
+            v_vec = vtxs[2] - vtxs[0]
+            u_vec /= (v_vec @ v_vec)
+            w_vec = FisherOrientation.rotate(z_axis, fr.rotation_axis, fr.rotation_angle)
+            trans_matrix[i, :, 0] = u_vec
+            trans_matrix[i, :, 1] = v_vec
+            trans_matrix[i, :, 2] = w_vec
+        self.squares = squares
+        self.center = center
+        self.trans_matrix = trans_matrix
+
+    def snap_vertices_and_edges(self):
+        n_frac = len(self.fractures)
+        epsilon = 0.05  # relaitve to the fracture
+        min_unit_fr = np.array([0 - epsilon, 0 - epsilon, 0 - epsilon])
+        max_unit_fr = np.array([1 + epsilon, 1 + epsilon, 0 + epsilon])
+        cos_limit = 1 / np.sqrt(1 + (epsilon / 2) ** 2)
+
+        all_points = self.squares.reshape(-1, 3)
+
+        isec_condidates = []
+        wrong_angle = np.zeros(n_frac)
+        for i, fr in enumerate(self.fractures):
+            if wrong_angle[i] > 0:
+                isec_condidates.append(None)
+                continue
+            projected = all_points - self.center[i, :][None, :]
+            projected = np.reshape(projected @ self.trans_matrix[i, :, :], (-1, 4, 3))
+
+            # get bounding boxes in the loc system
+            min_projected = np.min(projected, axis=1)   # shape (N, 3)
+            max_projected = np.max(projected, axis=1)
+            # flag fractures that are out of the box
+            flag = np.any(np.logical_or(min_projected > max_unit_fr[None, :], max_projected < min_unit_fr[None, :]), axis=1)
+            flag[i] = 1 # omit self
+            candidates = np.nonzero(flag == 0)[0]   # indices of fractures close to 'fr'
+            isec_condidates.append(candidates)
+            #print("fr: ", i, candidates)
+            for i_fr in candidates:
+                if i_fr > i:
+                    cos_angle_of_normals = self.trans_matrix[i, :, 2] @ self.trans_matrix[i_fr, :, 2]
+                    if cos_angle_of_normals > cos_limit:
+                        wrong_angle[i_fr] = 1
+                        print("wrong_angle: ", i, i_fr)
+
+                    # atract vertices
+                    fr = projected[i_fr]
+                    flag = np.any(np.logical_or(fr > max_unit_fr[None, :], fr < min_unit_fr[None, :]), axis=1)
+                    print(np.nonzero(flag == 0))
+
+def fr_intersect(fractures):
+    """
+    1. create fracture shape vertices (rotated, translated) square
+        - create vertices of the unit shape
+        - use FisherOrientation.rotate
+    2. intersection of a line with plane/square
+    3. intersection of two squares:
+        - length of the intersection
+        - angle
+        -
+    :param fractures:
+    :return:
+    """
+
+
+
+    # project all points to all fractures (getting local coordinates on the fracture system)
+    # fracture system axis:
+    # u_vec = vtxs[1] - vtxs[0]
+    # v_vec = vtxs[2] - vtxs[0]
+    # w_vec ... unit normal
+    # fractures with angle that their max distance in the case of intersection
+    # is not greater the 'epsilon'
+
+
+
+
+
+
+

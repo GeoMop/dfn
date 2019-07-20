@@ -181,7 +181,14 @@ def test_intensity_p_32():
     print("sample len: ", len(fr))
     assert np.isclose(len(fr), fr_size, 3*np.sqrt(fr_size))
 
-if __name__ == "__main__":
-    test_intensity_p_32()
-    #test_fracture_population()
 
+
+def test_fracture_class():
+    fr1 = frac.FractureShape(r=1, rotation_axis=np.array([0,0,0]), rotation_angle=0,
+                             centre=np.array([0,0,0]), shape_angle=0, region="1")
+    fr2 = frac.FractureShape(r=0.8, rotation_axis=np.array([0, 1, 0]), rotation_angle=np.pi/2,
+                             centre=np.array([0, 0, 0.41]), shape_angle=0, region="2")
+    fr_obj = frac.Fractures([fr1, fr2])
+    fr_obj.compute_transformed_shapes()
+    print(fr_obj.squares)
+    fr_obj.snap_vertices_and_edges()
