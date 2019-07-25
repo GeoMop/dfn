@@ -158,6 +158,43 @@ class Triangle:
         return height / max_edge
 
 
+class Line:
+    edges = [[0,1]]
+
+    def __init__(self, nodes):
+        self.dim = 1
+        self.nodes = nodes
+        self._edge_lens = None
+
+    @property
+    def measure(self):
+        return  self.edge_lens[0]
+
+    @property
+    def edge_lens(self):
+        if self._edge_lens is None:
+            self._edge_lens = [np.linalg.norm(edge_vec) for edge_vec in self.edge_vectors]
+        return self._edge_lens
+
+
+class Line:
+    edges = []
+
+    def __init__(self, nodes):
+        self.dim = 0
+        self.nodes = nodes
+
+    @property
+    def measure(self):
+        return  0.0
+
+    @property
+    def edge_lens(self):
+        return []
+
+
+
+
 class HealMesh:
 
     @staticmethod
@@ -166,7 +203,7 @@ class HealMesh:
         return HealMesh(gmsh_io.GmshIO(mesh_file), mesh_file)
 
 
-    def __init__(self, mesh_io, mesh_file="mesh.msh"):
+    def __init__(self, mesh_io, mesh_file="mesh.msh", node_tol=0.0001):
         self.mesh = mesh_io
         self.make_node_to_el()
         self.max_ele_id = max(self.mesh.elements.keys())
@@ -176,6 +213,14 @@ class HealMesh:
         self.healed_mesh_name = base + "_healed.msh"
 
         self.modified_elements = set()
+        aabb_min = np.full(3, +np.inf)
+        aabb_max = np.full(3, -np.inf)
+        for n in self.mesh.nodes:
+            aabb_max = np.maximum(aabb_max, n)
+            aabb_min = np.minimum(aabb_min, n)
+        diam = np.max(aabb_max - aabb_min)
+        self._abs_node_tol = node_tol * diam
+        print("diam: ", self._abs_node_tol)
 
 
     def make_node_to_el(self):
@@ -198,8 +243,12 @@ class HealMesh:
         return modif
 
     def add_element(self, ele):
-        type, tags, node_ids = ele
+
+        type, tags, node_ids, shape = self._make_shape(ele)
+
         self.max_ele_id += 1
+        if shape.measure < 0.1:
+            print("add el:", self.max_ele_id, shape.measure)
         self.mesh.elements[self.max_ele_id] = ele
         for nid in node_ids:
             self.node_els[nid].add(self.max_ele_id)
@@ -217,6 +266,40 @@ class HealMesh:
         self.mesh.nodes[nid] = node
         self.modified_elements.update(self.node_els[nid])
 
+
+    def merge_node(self, rm_node, target_node):
+        """
+        Merge node rm_node with node 'target_node'.
+        Move both points to the average position.
+
+        :param rm_node:
+        :param target_node:
+        :param new_pos:
+        :return:
+        """
+
+        assert rm_node != target_node
+
+        # remove elements containing the edge (a,b)
+        merge_nodes = [rm_node, target_node]
+        for i_edge_el in self.common_elements(merge_nodes):
+            self.remove_element(i_edge_el)
+
+        # average nodes, remove the second one
+        node_avg = np.average([np.array(self.mesh.nodes[n]) for n in merge_nodes], axis=0)
+        self.move_node(target_node, node_avg)
+
+        # substitute target_node for the rm_node
+        for i_el in self.common_elements([rm_node]):
+            el_type, el_tags, el_node_ids = self.mesh.elements[i_el]
+            el_node_ids = [target_node if n == rm_node else n for n in el_node_ids]
+            self.remove_element(i_el)
+            self.add_element((el_type, el_tags, el_node_ids))
+
+        self.remove_node(rm_node)
+        return target_node
+
+
     def remove_node(self, nid):
         assert len(self.node_els[nid]) == 0, self.node_els[nid]
         del self.mesh.nodes[nid]
@@ -230,6 +313,7 @@ class HealMesh:
             except KeyError as e:
                 print("Failed for ", nid)
                 print(self._history[eid])
+                raise e
         self._history[eid].append(('R', node_ids))
         del self.mesh.elements[eid]
 
@@ -282,15 +366,6 @@ class HealMesh:
     #     self._heal_queue(tol, check_method=self._check_flat)
 
 
-    def heal_mesh(self, tol_edge_ratio=0.01, tol_flat_ratio=0.01):
-        el_to_check = collections.deque(self.mesh.elements.keys())
-        while el_to_check:
-            eid = el_to_check.popleft()
-            if eid in self.mesh.elements:
-                modified = self._check_small_edge(eid, tol_edge_ratio)
-                if len(modified) == 0:
-                    modified = self._check_flat(eid, tol_flat_ratio)
-                el_to_check.extend(modified)
 
     def _make_shape(self, element_tuple):
         type, tags, node_ids = element_tuple
@@ -299,8 +374,10 @@ class HealMesh:
             return type, tags, node_ids, Tetrahedron(nodes)
         elif len(node_ids) == 3:
             return type, tags, node_ids, Triangle(nodes)
+        elif len(node_ids) == 2:
+            return type, tags, node_ids, Line(nodes)
         else:
-            return type, tags, node_ids, None
+            return type, tags, node_ids, Point(nodes)
 
 
     def quality_statistics(self, methods, bad_el_tol=0.01):
@@ -315,7 +392,7 @@ class HealMesh:
         histogram = {method: np.zeros_like(bins, dtype=int) for method in methods}
         for eid, e in self.mesh.elements.items():
             type, tags, node_ids, shape = self._make_shape(e)
-            if shape:
+            if shape.dim > 1:
                 for method, hist in histogram.items():
                     quality = getattr(shape, method)()
                     if quality <= bad_el_tol:
@@ -344,13 +421,133 @@ class HealMesh:
             yaml.dump(output, f)
 
 
+    def heal_mesh(self, tol_edge_ratio=0.01, tol_flat_ratio=0.01):
+        el_to_check = collections.deque(self.mesh.elements.keys())
+        while el_to_check:
+            eid = el_to_check.popleft()
+            if eid in self.mesh.elements:
+                modified = self._check_degen_nodes(eid)
+                if len(modified) == 0:
+                    modified = self._check_small_edge(eid, tol_edge_ratio)
+                if len(modified) == 0:
+                    modified = self._check_flat(eid, tol_flat_ratio)
+                el_to_check.extend(modified)
+
+
+    def _check_degen_nodes(self, eid):
+        """
+        Merge close nodes. Performe at most one merge per element.
+        :param eid:
+        :return:
+        """
+        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
+        if shape.dim == 0:
+            return []
+        for elen, edge in zip(shape.edge_lens, shape.edges):
+            if node_ids[edge[0]] == node_ids[edge[1]]:
+                print("eid: {} degen nodes: {}".format(eid, node_ids))
+                self.remove_element(eid)
+                return [eid]
+            if elen < self._abs_node_tol:
+                print("eid: {} close: {} nodes: {}".format(eid, elen, node_ids))
+                self.merge_node(node_ids[edge[1]], node_ids[edge[0]])
+                break
+        return self.reset_modified()
+
+    def _check_small_edge(self, eid, quality_tol):
+        """
+        Check element, possibly contract its shortest edge.
+        :param mesh:
+        :param eid:
+        :return: List of still existing but changed elements.
+        """
+        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
+        merge_nodes = None
+        if shape.dim > 1:
+            quality = shape.small_edge_ratio()
+            # print(eid, quality)
+            if quality < quality_tol:
+                loc_node_a, loc_node_b = shape.edges[np.argmin(shape.edge_lens)]
+                merge_nodes = (node_ids[loc_node_a], node_ids[loc_node_b])
+
+
+        if merge_nodes is None:
+            return []
+
+
+        # merge nodes
+        print("eid: {} q{}d: {} nodes: {}".format(eid, shape.dim, quality, merge_nodes))
+        node_a, node_b = merge_nodes
+        if self.merge_node(node_b, node_a) is None:
+            # degenerate case
+            self.remove_element(eid)
+            return [eid]
+
+        return self.reset_modified()
+
+
+
+
+    def _check_flat(self, eid, quality_tol):
+        """
+        Check that element is flat. Use angles between face normals
+        :param eid:
+        :param quality_tol:
+        :return:
+        """
+        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
+        if shape.dim < 3:
+            return []
+
+        quality = shape.flat_indicator()
+        gamma_q = shape.gmsh_gamma()
+        if gamma_q < quality:
+            print(eid, gamma_q / quality, gamma_q, quality)
+        if quality > quality_tol:
+            return []
+        print("eid: {} flat_q: {} gam: {} nodes: {}".format(eid, quality, gamma_q, node_ids))
+
+        # approx normal to all edges
+        common_normal = shape.common_normal()
+        common_normal /= np.linalg.norm(common_normal)
+        # project nodes to the approx plane
+        normal_component = shape.nodes @ common_normal
+        avg = np.average(normal_component)
+        flat_nodes = shape.nodes - (normal_component - avg)[:, None] * common_normal[None, :]
+        assert np.isclose(np.linalg.det(flat_nodes[1:, :] - flat_nodes[0, :]), 0.0)
+
+        # cases for projected shapes
+        cos_face_norm = shape.face_normals @ common_normal
+        n_pos = np.sum(cos_face_norm > 0.0)
+        if n_pos == 2:
+            # quad flat case
+            vtx_faces = np.array(shape.vtxs_faces)
+            i_pos_faces = np.arange(4)[cos_face_norm > 0]
+            pos_faces = vtx_faces[i_pos_faces, :]
+            pos_edge_vtxs = list(set.intersection(*[set(vtxs) for vtxs in pos_faces]))
+            i_neg_faces = np.arange(4)[cos_face_norm <= 0]
+            neg_faces = vtx_faces[i_neg_faces, :]
+            neg_edge_vtxs = list(set.intersection(*[set(vtxs) for vtxs in neg_faces]))
+            return self._heal_quad_flat_case(eid, flat_nodes, pos_edge_vtxs, neg_edge_vtxs, quality_tol)
+
+        elif n_pos == 1:
+            outer_face = np.argmax(cos_face_norm > 0)
+            return self._heal_triangle_flat_case(eid, flat_nodes, outer_face, quality_tol)
+        elif n_pos==3:
+            outer_face = np.argmax(cos_face_norm <= 0)
+            return self._heal_triangle_flat_case(eid, flat_nodes, outer_face, quality_tol)
+        else:
+            assert False
+
+
+
+
 
 
 
 
     def _heal_quad_flat_case(self, eid, flat_nodes, pos_edge, neg_edge, tol):
         """
-
         :param eid:
         :param flat_nodes:
         :param pos_edge:
@@ -372,20 +569,25 @@ class HealMesh:
         rhs = (pos_0 - neg_0)[sub_rows[im]]
         pos_t, neg_t = np.linalg.solve(M, -rhs)
         isec_point = pos_0 + pos_t * pos_u
+
         print("isec: ", (pos_t, neg_t))
-        assert 0 - tol < pos_t < 1 + tol,(pos_t, neg_t)
-        assert 0 - tol < neg_t < 1 + tol,(pos_t, neg_t)
         skew_edges = [(pos_t, pos_edge), (neg_t, neg_edge)]
         for i, (t, edge) in enumerate(skew_edges):
             other_edge = skew_edges[1-i][1]
-            if np.abs(t - 0) < tol:
-                # project point 0 to isec
+
+            tria_nodes = np.stack((flat_nodes[edge[0]], flat_nodes[other_edge[0]], flat_nodes[other_edge[1]]), axis=0)
+            if Triangle(tria_nodes).small_edge_ratio() < tol:
+                # move point 0 to isec
                 flat_nodes[edge[0]] = isec_point
                 return self._heal_degenerate_flat(eid, flat_nodes, (edge[0], edge[1], other_edge[0], other_edge[1]))
-            if np.abs(t - 1) < tol:
-                # project point 1 to isec
+            tria_nodes = np.stack((flat_nodes[edge[1]], flat_nodes[other_edge[0]], flat_nodes[other_edge[1]]), axis=0)
+            if Triangle(tria_nodes).small_edge_ratio() < tol:
+                # move point 1 to isec
                 flat_nodes[edge[1]] = isec_point
                 return self._heal_degenerate_flat(eid, flat_nodes, (edge[1], edge[0], other_edge[0], other_edge[1]))
+        assert 0 < pos_t < 1 ,(pos_t, neg_t)
+        assert 0 < neg_t < 1 ,(pos_t, neg_t)
+
 
         # non-degenerate
         print("eid: ", eid, "flat quad: ", node_ids)
@@ -457,6 +659,7 @@ class HealMesh:
             self.remove_element(el_id)
 
         # split the third face
+        new_node_id = node_ids[loc_points[0]]
         face_nids = face_node_ids[2]
         split_edge_nid0 = face_nids[0]
         split_edge_nid1 = face_nids[1]
@@ -470,7 +673,7 @@ class HealMesh:
             loc_n1 = el_node_ids.index(split_edge_nid1)
             for pos_new in [loc_n0, loc_n1]:
                 new_node_ids = el_node_ids.copy()
-                new_node_ids[pos_new] = face_nids[0]
+                new_node_ids[pos_new] = new_node_id
                 self.add_element((el_type, el_tags, new_node_ids))
 
         return self.reset_modified()
@@ -532,106 +735,4 @@ class HealMesh:
                 new_node_ids[i_nid_el] = node_ids[i_inner_node]
                 self.add_element((el_type, el_tags, new_node_ids))
         return self.reset_modified()
-
-    def _check_flat(self, eid, quality_tol):
-        """
-        Check that element is flat. Use angles between face normals
-        :param eid:
-        :param quality_tol:
-        :return:
-        """
-        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
-        if shape is None or shape.dim != 3:
-            return []
-
-        quality = shape.flat_indicator()
-        gamma_q = shape.gmsh_gamma()
-        if gamma_q < quality:
-            print(eid, gamma_q / quality, gamma_q, quality)
-        if quality > quality_tol:
-            return []
-        print("eid: {} flat_q: {} gam: {} nodes: {}".format(eid, quality, gamma_q, node_ids))
-
-        # approx normal to all edges
-        common_normal = shape.common_normal()
-        common_normal /= np.linalg.norm(common_normal)
-        # project nodes to the approx plane
-        normal_component = shape.nodes @ common_normal
-        avg = np.average(normal_component)
-        flat_nodes = shape.nodes - (normal_component - avg)[:, None] * common_normal[None, :]
-        assert np.isclose(np.linalg.det(flat_nodes[1:, :] - flat_nodes[0, :]), 0.0)
-
-        # cases for projected shapes
-        cos_face_norm = shape.face_normals @ common_normal
-        n_pos = np.sum(cos_face_norm > 0.0)
-        if n_pos == 2:
-            # quad flat case
-            vtx_faces = np.array(shape.vtxs_faces)
-            i_pos_faces = np.arange(4)[cos_face_norm > 0]
-            pos_faces = vtx_faces[i_pos_faces, :]
-            pos_edge_vtxs = list(set.intersection(*[set(vtxs) for vtxs in pos_faces]))
-            i_neg_faces = np.arange(4)[cos_face_norm <= 0]
-            neg_faces = vtx_faces[i_neg_faces, :]
-            neg_edge_vtxs = list(set.intersection(*[set(vtxs) for vtxs in neg_faces]))
-            return self._heal_quad_flat_case(eid, flat_nodes, pos_edge_vtxs, neg_edge_vtxs, quality_tol)
-
-        elif n_pos == 1:
-            outer_face = np.argmax(cos_face_norm > 0)
-            return self._heal_triangle_flat_case(eid, flat_nodes, outer_face, quality_tol)
-        elif n_pos==3:
-            outer_face = np.argmax(cos_face_norm <= 0)
-            return self._heal_triangle_flat_case(eid, flat_nodes, outer_face, quality_tol)
-        else:
-            assert False
-
-
-
-
-    def _check_small_edge(self, eid, quality_tol):
-        """
-        Check element, possibly contract its shortest edge.
-        :param mesh:
-        :param eid:
-        :return: List of still existing but changed elements.
-        """
-        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
-        merge_nodes = None
-        if shape is not None:
-            quality = shape.small_edge_ratio()
-            # print(eid, quality)
-            if quality < quality_tol:
-                loc_node_a, loc_node_b = shape.edges[np.argmin(shape.edge_lens)]
-                merge_nodes = (node_ids[loc_node_a], node_ids[loc_node_b])
-
-
-        if merge_nodes is None:
-            return []
-
-
-        # merge nodes
-        print("eid: {} q{}d: {} nodes: {}".format(eid, shape.dim, quality, merge_nodes))
-        node_a, node_b = merge_nodes
-        if node_a == node_b:
-            # degenerate case
-            self.remove_element(eid)
-            return [eid]
-
-        # remove elements containing the edge (a,b)
-        for i_edge_el in self.common_elements(merge_nodes):
-            self.remove_element(i_edge_el)
-
-        # substitute node a for the node b
-        for i_b_el in self.common_elements([node_b]):
-            el_type, el_tags, el_node_ids = self.mesh.elements[i_b_el]
-            el_node_ids = [node_a if n == node_b else n for n in el_node_ids]
-            self.remove_element(i_b_el)
-            self.add_element((el_type, el_tags, el_node_ids))
-
-        # average nodes, remove the second one
-        node_avg = np.average([np.array(self.mesh.nodes[n]) for n in merge_nodes], axis=0)
-        self.remove_node(node_b)
-        self.move_node(node_a, node_avg)
-
-        return self.reset_modified()
-
 
