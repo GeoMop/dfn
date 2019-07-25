@@ -198,9 +198,9 @@ class Line:
 class HealMesh:
 
     @staticmethod
-    def read_mesh(mesh_file):
+    def read_mesh(mesh_file, node_tol=0.0001):
         import gmsh_io
-        return HealMesh(gmsh_io.GmshIO(mesh_file), mesh_file)
+        return HealMesh(gmsh_io.GmshIO(mesh_file), mesh_file, node_tol)
 
 
     def __init__(self, mesh_io, mesh_file="mesh.msh", node_tol=0.0001):
@@ -421,9 +421,12 @@ class HealMesh:
             yaml.dump(output, f)
 
 
-    def heal_mesh(self, tol_edge_ratio=0.01, tol_flat_ratio=0.01):
+    def heal_mesh(self, tol_edge_ratio=0.01, tol_flat_ratio=0.01, fraction_of_new_els=2):
+        orig_n_el = self.max_ele_id
         el_to_check = collections.deque(self.mesh.elements.keys())
         while el_to_check:
+            if self.max_ele_id > fraction_of_new_els * orig_n_el:
+                break
             eid = el_to_check.popleft()
             if eid in self.mesh.elements:
                 modified = self._check_degen_nodes(eid)
