@@ -69,7 +69,7 @@ class Tetrahedron:
         a,b,c,A,B,C = self.edge_lens
         x_area = (a*A + b*B + c*C)*(a*A + b*B - c*C)*(a*A - b*B + c*C)*(-a*A + b*B + c*C)
         assert x_area > 0, x_area
-        R = np.sqrt(x_area) / 24 / V
+        R = np.sqrt(x_area) / 24 / max(1e-300, V)
         return 3 * r/max(1e-300, R)
 
 
@@ -243,12 +243,18 @@ class HealMesh:
         return modif
 
     def add_element(self, ele):
+        if self.is_duplicate_el(ele):
+            return
 
         type, tags, node_ids, shape = self._make_shape(ele)
 
         self.max_ele_id += 1
         if shape.measure < 0.1:
             print("add el:", self.max_ele_id, shape.measure)
+            #if shape.measure < 0:
+            #    node_ids[0], node_ids[1] = node_ids[1], node_ids[0]
+            #    ele = (type, tags, node_ids)
+
         self.mesh.elements[self.max_ele_id] = ele
         for nid in node_ids:
             self.node_els[nid].add(self.max_ele_id)
@@ -263,8 +269,18 @@ class HealMesh:
         return self.max_node_id
 
     def move_node(self, nid, node):
+        orig = [(eid, self.element_measure(eid)) for eid in self.active(self.node_els[nid])]
         self.mesh.nodes[nid] = node
+        new_signs = [self.element_measure(eid) for eid in self.active(self.node_els[nid])]
+        for (eid, o), n in zip(orig, new_signs):
+            if n < 0 or o < 0:
+                print("move out: ", eid, o, n)
         self.modified_elements.update(self.node_els[nid])
+
+    def element_measure(self, eid):
+        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
+        return shape.measure
+
 
 
     def merge_node(self, rm_node, target_node):
@@ -316,6 +332,14 @@ class HealMesh:
                 raise e
         self._history[eid].append(('R', node_ids))
         del self.mesh.elements[eid]
+
+    def is_duplicate_el(self, ele):
+        type, tags, node_ids = ele
+        # check that there isn't the same element already
+        duplicate_els = [eid for eid in self.common_elements(node_ids) if self.mesh.elements[eid][0] == type]
+        return duplicate_els
+
+
 
     def common_elements(self, node_ids, max=1000):
         """
@@ -443,7 +467,15 @@ class HealMesh:
         :param eid:
         :return:
         """
-        type, tags, node_ids, shape = self._make_shape(self.mesh.elements[eid])
+        ele = self.mesh.elements[eid]
+        dupl = self.is_duplicate_el(ele)
+        if len(dupl) > 1:
+            print("dupl el: ", eid, dupl)
+            for other_eid in dupl:
+                if other_eid != eid:
+                    self.remove_element(other_eid)
+            return [eid]
+        type, tags, node_ids, shape = self._make_shape(ele)
         if shape.dim == 0:
             return []
         for elen, edge in zip(shape.edge_lens, shape.edges):
@@ -468,11 +500,14 @@ class HealMesh:
         merge_nodes = None
         if shape.dim > 1:
             quality = shape.small_edge_ratio()
-            # print(eid, quality)
             if quality < quality_tol:
                 loc_node_a, loc_node_b = shape.edges[np.argmin(shape.edge_lens)]
                 merge_nodes = (node_ids[loc_node_a], node_ids[loc_node_b])
-
+            # else:
+            #     gamma = shape.gmsh_gamma()
+            #     if gamma < quality_tol:
+            #         print("  eid: {} edge ratio: {} > gamma: {}".format(eid, quality, gamma))
+            #         print("  elens: ", shape.edge_lens)
 
         if merge_nodes is None:
             return []
@@ -503,12 +538,12 @@ class HealMesh:
             return []
 
         quality = shape.flat_indicator()
-        gamma_q = shape.gmsh_gamma()
-        if gamma_q < quality:
-            print(eid, gamma_q / quality, gamma_q, quality)
         if quality > quality_tol:
+            gamma = shape.gmsh_gamma()
+            if gamma < quality_tol:
+                print("  eid: {} flatness: {} > gamma: {}".format(eid, quality, gamma))
             return []
-        print("eid: {} flat_q: {} gam: {} nodes: {}".format(eid, quality, gamma_q, node_ids))
+        print("eid: {} flat_q: {} nodes: {}".format(eid, quality, node_ids))
 
         # approx normal to all edges
         common_normal = shape.common_normal()
@@ -579,12 +614,19 @@ class HealMesh:
             other_edge = skew_edges[1-i][1]
 
             tria_nodes = np.stack((flat_nodes[edge[0]], flat_nodes[other_edge[0]], flat_nodes[other_edge[1]]), axis=0)
-            if Triangle(tria_nodes).small_edge_ratio() < tol:
+            tria_flatness = Triangle(tria_nodes).small_edge_ratio()
+            if tria_flatness < tol:
                 # move point 0 to isec
                 flat_nodes[edge[0]] = isec_point
                 return self._heal_degenerate_flat(eid, flat_nodes, (edge[0], edge[1], other_edge[0], other_edge[1]))
+            else:
+                dist = min(np.abs(t-0), np.abs(t-1))
+                if dist < 0.1:
+                    edge_len = np.linalg.norm(flat_nodes[edge[1]] - flat_nodes[edge[0]])
+                    print("flat triangle: ", tria_flatness, dist, dist * edge_len, self._abs_node_tol)
             tria_nodes = np.stack((flat_nodes[edge[1]], flat_nodes[other_edge[0]], flat_nodes[other_edge[1]]), axis=0)
-            if Triangle(tria_nodes).small_edge_ratio() < tol:
+            tria_flatness = Triangle(tria_nodes).small_edge_ratio()
+            if tria_flatness < tol:
                 # move point 1 to isec
                 flat_nodes[edge[1]] = isec_point
                 return self._heal_degenerate_flat(eid, flat_nodes, (edge[1], edge[0], other_edge[0], other_edge[1]))
