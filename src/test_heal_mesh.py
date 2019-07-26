@@ -43,7 +43,7 @@ def test_check_flat_quad():
     mesh_io.elements[0] = (4, (1,2,3), [0,1,2,3])
 
     hm = heal_mesh.HealMesh(mesh_io)
-    hm._check_flat(0, 0.01)
+    hm._check_flat_tetra(0, 0.01)
 
 def test_check_flat_quad_degen():
     h = 0.005
@@ -54,4 +54,4 @@ def test_check_flat_quad_degen():
     mesh_io.elements[0] = (4, (1,2,3), [0,1,2,3])
 
     hm = heal_mesh.HealMesh(mesh_io)
-    hm._check_flat(0, 0.01)
+    hm._check_flat_tetra(0, 0.01)
