@@ -435,7 +435,7 @@ class HealMesh:
         hist, bins, bad_els = self.quality_statistics(bad_el_tol=el_tol)
         output = {}
         for name, method in methods.items():
-            output[name] = dict(hist=hist[method].tolist(), bins=bins.tolist(), bad_elements=bad_els[method], bad_el_tol=el_tol)
+            output[name] = dict(hist=hist[name].tolist(), bins=bins.tolist(), bad_elements=bad_els[name], bad_el_tol=el_tol)
         import yaml
         with open(filename, "w") as f:
             yaml.dump(output, f)
