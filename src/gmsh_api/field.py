@@ -131,10 +131,10 @@ def restrict(field:Field, *object_sets, add_boundary=False):
 
     factory = object_sets[0].factory
     factory.synchronize()
-    group = factory.group(object_sets)
+    group = factory.group(*object_sets)
     if add_boundary:
         b_group = group.get_boundary(combined=False)
-        group = factory.group([group, b_group])
+        group = factory.group(group, b_group)
     points, edges, faces, volumes = group.split_by_dimension()
     id = gmsh_field.add('Restrict')
     gmsh_field.setNumber(id, "IField", field)
