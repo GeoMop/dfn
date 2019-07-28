@@ -388,11 +388,91 @@ class UniformBoxPosition:
     dimensions: List[float]
     center: List[float] = [0,0,0]
 
-    def sample(self, size=1):
+    def sample(self, radius, axis, angle, shape_angle):
+        size = 1
         pos = np.empty((size, 3), dtype=float)
         for i in range(3):
             pos[:, i] =  np.random.uniform(self.center[i] - self.dimensions[i]/2, self.center[i] + self.dimensions[i]/2, size)
         return pos
+
+@attr.s(auto_attribs=True)
+class ConnectedPosition:
+    init_boxes: List[List[float]]
+    # List of axes aligned boxes, box is list of six float with the box corner coordinates
+    # sides of boxes are used to initialize list of fractures
+    fractures: List[np.array] = []
+    # List of fractures, fracture is the transformation matrix (4,3) to transform from the local UVW coordinates to the global coordinates XYZ.
+    # Fracture in UvW: U=(-1,1), V=(-1,1), W=0.
+    surfaces: List[float] = []
+
+
+    def sample(self, diameter, axis, angle, shape_angle):
+        if len(self.fractures) == 0:
+            # fill by box sides
+            self._total_surface = 0
+            for fr in  self.boxes_to_fractures(self.init_boxes):
+                self.add_fracture(fr)
+        assert len(self.fractures) == len(self.surfaces)
+
+        q = np.random.uniform(-1, 1, size=3)
+        q[2] = 0
+        uvq_vec = np.array([[1, 0, 0], [0, 1, 0], q])
+        uvq_vec *= diameter/2
+        uvq_vec = FisherOrientation.rotate(uvq_vec, np.array([0, 0, 1]), shape_angle)
+        uvq_vec = FisherOrientation.rotate(uvq_vec, axis, angle)
+
+        # choose the fracture to prolongate
+        surf = np.random.uniform(0, self._total_surface, size=1)
+        c_surf = 0
+        for fr_surf, fr in zip(self.surfaces, self.fractures):
+            c_surf += fr_surf
+            if c_surf >= surf:
+                uvw = np.random.uniform(-1, 1, size=3)
+                uvw[2] = 0
+                parent_pt = fr[:, 0:3] @ uvw + fr[:, 3]
+                center = parent_pt + uvq_vec[2, :]
+                break
+        self.add_fracture(self.make_fracture(center, uvq_vec[0,:], uvq_vec[1,:]))
+        return center
+
+    def add_fracture(self, fr_mat):
+        self.fractures.append(fr_mat)
+        surf = np.linalg.norm(fr_mat[:, 2])
+        self.surfaces.append(surf)
+        self._total_surface += surf
+
+
+    @classmethod
+    def boxes_to_fractures(cls, boxes):
+        fractures = []
+        for box in boxes:
+            box = np.array(box)
+            ax, ay, az, bx, by, bz = range(6)
+            sides = [[ax, ay, az, bx, ay, az, ax, ay, bz],
+                     [ax, ay, az, ax, by, az, bx, ay, az],
+                     [ax, ay, az, ax, ay, bz, ax, by, az],
+                     [bx, by, bz, ax, by, bz, bx, by, az],
+                     [bx, by, bz, bx, ay, bz, ax, by, bz],
+                     [bx, by, bz, bx, by, az, bx, ay, bz]]
+            for side in sides:
+                v0 = box[side[0:3]]
+                v1 = box[side[3:6]]
+                v2 = box[side[6:9]]
+                fractures.append(cls.make_fracture(v0, v1/2, v2/2))
+        return fractures
+
+
+    @classmethod
+    def make_fracture(cls, center, u_vec, v_vec):
+        """
+        Construct transformation matrix from one square cornerthree square corners,
+        """
+        w_vec = np.cross(u_vec, v_vec)
+        return np.stack((u_vec, v_vec, w_vec, center), axis=1)
+
+
+
+
 
 @attr.s(auto_attribs=True)
 class FrFamily:
@@ -501,11 +581,11 @@ class Population:
             name = f.name
             diams = f.shape.sample(self.volume, keep_nonempty=keep_nonempty)
             fr_axis_angle = f.orientation.sample_axis_angle(size = len(diams))
-            centers = pos_distr.sample(size = len(diams))
             shape_angle = np.random.uniform(0, 2 * np.pi, len(diams))
-            for r, aa, c, sa in zip(diams, fr_axis_angle, centers, shape_angle):
+            for r, aa, sa in zip(diams, fr_axis_angle, shape_angle):
                 axis, angle = aa[:3], aa[3]
-                fractures.append(FractureShape(r, c, axis, angle, sa, name, 1))
+                center = pos_distr.sample(r, axis, angle, sa)
+                fractures.append(FractureShape(r, center, axis, angle, sa, name, 1))
         return fractures
 
 #
