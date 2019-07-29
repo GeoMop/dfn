@@ -3,7 +3,7 @@ Module for statistical description of the fracture networks.
 It provides appropriate statistical models as well as practical sampling methods.
 """
 
-from typing import Union, List
+from typing import Union, List, Tuple
 import numpy as np
 import attr
 import json
@@ -389,30 +389,38 @@ class UniformBoxPosition:
     center: List[float] = [0,0,0]
 
     def sample(self, radius, axis, angle, shape_angle):
-        size = 1
-        pos = np.empty((size, 3), dtype=float)
+        #size = 1
+        #pos = np.empty((size, 3), dtype=float)
+        #for i in range(3):
+        #    pos[:, i] =  np.random.uniform(self.center[i] - self.dimensions[i]/2, self.center[i] + self.dimensions[i]/2, size)
+        pos = np.empty(3, dtype=float)
         for i in range(3):
-            pos[:, i] =  np.random.uniform(self.center[i] - self.dimensions[i]/2, self.center[i] + self.dimensions[i]/2, size)
+            pos[i] = np.random.uniform(self.center[i] - self.dimensions[i] / 2, self.center[i] + self.dimensions[i] / 2, size=1)
         return pos
 
 @attr.s(auto_attribs=True)
 class ConnectedPosition:
+    confining_box: List[float]
+    # dimensions of the confining box (center in origin)
     init_boxes: List[List[float]]
     # List of axes aligned boxes, box is list of six float with the box corner coordinates
     # sides of boxes are used to initialize list of fractures
     fractures: List[np.array] = []
     # List of fractures, fracture is the transformation matrix (4,3) to transform from the local UVW coordinates to the global coordinates XYZ.
     # Fracture in UvW: U=(-1,1), V=(-1,1), W=0.
-    surfaces: List[float] = []
-
+    #surfaces: List[float] = []
+    # Surface areas of the fractures. Used to sample particular fracture.
+    #point_fracture: List[int] = []
+    points: np.array = None
 
     def sample(self, diameter, axis, angle, shape_angle):
         if len(self.fractures) == 0:
+            self.confining_box = np.array(self.confining_box)
             # fill by box sides
-            self._total_surface = 0
-            for fr in  self.boxes_to_fractures(self.init_boxes):
-                self.add_fracture(fr)
-        assert len(self.fractures) == len(self.surfaces)
+            self.points = np.empty((0,3))
+            for fr_mat in self.boxes_to_fractures(self.init_boxes):
+                self.add_fracture(fr_mat)
+        #assert len(self.fractures) == len(self.surfaces)
 
         q = np.random.uniform(-1, 1, size=3)
         q[2] = 0
@@ -422,24 +430,42 @@ class ConnectedPosition:
         uvq_vec = FisherOrientation.rotate(uvq_vec, axis, angle)
 
         # choose the fracture to prolongate
-        surf = np.random.uniform(0, self._total_surface, size=1)
-        c_surf = 0
-        for fr_surf, fr in zip(self.surfaces, self.fractures):
-            c_surf += fr_surf
-            if c_surf >= surf:
-                uvw = np.random.uniform(-1, 1, size=3)
-                uvw[2] = 0
-                parent_pt = fr[:, 0:3] @ uvw + fr[:, 3]
-                center = parent_pt + uvq_vec[2, :]
-                break
-        self.add_fracture(self.make_fracture(center, uvq_vec[0,:], uvq_vec[1,:]))
+        i_point = np.random.randint(0, len(self.points), size=1)[0]
+        center = self.points[i_point] + uvq_vec[2, :]
+        self.add_fracture(self.make_fracture(center, uvq_vec[0, :], uvq_vec[1, :]))
         return center
 
     def add_fracture(self, fr_mat):
+        i_fr = len(self.fractures)
         self.fractures.append(fr_mat)
         surf = np.linalg.norm(fr_mat[:, 2])
-        self.surfaces.append(surf)
-        self._total_surface += surf
+
+        points_density = 0.01
+        # mean number of points per unit square meter
+        points_mean_dist = 1 / np.sqrt(points_density)
+        n_points = np.random.poisson(lam=surf * points_density, size=1)
+        uv = np.random.uniform(-1, 1, size=(2, n_points[0]))
+        fr_points = fr_mat[:, 0:2] @ uv + fr_mat[:, 3][:, None]
+        fr_points = fr_points.T
+        new_points = []
+
+        for pt in fr_points:
+            #if len(self.points) >0:
+            dists_short = np.linalg.norm(self.points[:,:] - pt[None,:], axis=1) < points_mean_dist
+            #else:
+            #    dists_short = []
+            if np.any(dists_short):
+                # substitute current point for a choosed close points
+                i_short = np.random.choice(np.arange(len(dists_short))[dists_short])
+                self.points[i_short] = pt
+                #self.point_fracture = i_fr
+            else:
+                # add new points that are in the confining box
+                if np.all((pt - self.confining_box/2) < self.confining_box):
+                    new_points.append(pt)
+                #self.point_fracture.append(i_fr)
+        if new_points:
+            self.points = np.concatenate((self.points, new_points), axis=0)
 
 
     @classmethod
